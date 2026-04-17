@@ -108,32 +108,27 @@ Place `creditcard.csv` in the `data/` directory:
 credit-card-fraud-detection/data/creditcard.csv
 ```
 
-### 3. Run Training Pipeline
+### 3. Run Training Pipeline (No Notebooks Required)
 
-Execute notebooks in order:
+Run one command:
 
 ```bash
-# Terminal 1: Run Jupyter
-jupyter notebook
-
-# Go through notebooks in this order:
-# 1. notebooks/01_eda.ipynb              (Exploratory analysis)
-# 2. notebooks/02_preprocessing.ipynb    (Data preprocessing)
-# 3. notebooks/03_model_logistic_regression.ipynb  (LR training)
-# 4. notebooks/04_model_random_forest.ipynb        (RF training)
-# 5. notebooks/05_model_xgboost.ipynb             (XGBoost training)
-# 6. notebooks/06_final_comparison.ipynb          (Model comparison)
+python src/train.py
 ```
 
-Or run all at once with a script:
-```bash
-python run_training.py  # (Create this script to automate)
-```
+This command runs end-to-end:
+- data loading and validation
+- preprocessing and scaling
+- baseline + SMOTE training flow
+- Logistic Regression, Random Forest, and XGBoost training
+- practical randomized tuning (student-laptop friendly)
+- evaluation + figure generation
+- model and metrics saving (including `models/best_model.pkl`)
 
 ### 4. Launch Web Interface
 
 ```bash
-# After training completes and models are saved
+# After training completes and models are saved by src/train.py
 python app.py
 
 # Open browser and navigate to:
@@ -264,7 +259,7 @@ python app.py
 ✅ Feature scaling to prevent bias  
 ✅ Handling class imbalance with SMOTE  
 ✅ Data leakage prevention  
-✅ Hyperparameter tuning with GridSearchCV  
+✅ Practical hyperparameter tuning with RandomizedSearchCV  
 ✅ Appropriate metrics for imbalanced data  
 ✅ Model comparison and selection  
 
@@ -296,7 +291,7 @@ Functions to load and explore the dataset
 Data cleaning, scaling, train/test split, SMOTE application
 
 ### train.py
-Model training and hyperparameter tuning functions
+Main entry point for one-command training pipeline (`python src/train.py`)
 
 ### evaluate.py
 Model evaluation and comparison utilities
@@ -393,7 +388,7 @@ This project is for educational purposes. Use freely for learning and demonstrat
 
 For questions or issues:
 1. Check `presentation_notes.md` for Q&A
-2. Review notebook comments for explanations
+2. Review notebook comments for exploration-only explanations
 3. Check code docstrings for function details
 4. Consult README sections above
 

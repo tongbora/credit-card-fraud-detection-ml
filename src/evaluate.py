@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score, confusion_matrix, classification_report
+    roc_auc_score, confusion_matrix, classification_report,
+    precision_recall_curve, auc
 )
 from config import METRICS_PATH
 
@@ -27,13 +28,16 @@ def evaluate_model(model, X_test, y_test, model_name="Model"):
     """
     y_pred = model.predict(X_test)
     y_pred_proba = model.predict_proba(X_test)[:, 1]
+    precision_curve, recall_curve, _ = precision_recall_curve(y_test, y_pred_proba)
+    pr_auc = auc(recall_curve, precision_curve)
     
     metrics = {
         'accuracy': accuracy_score(y_test, y_pred),
         'precision': precision_score(y_test, y_pred, zero_division=0),
         'recall': recall_score(y_test, y_pred, zero_division=0),
         'f1': f1_score(y_test, y_pred, zero_division=0),
-        'roc_auc': roc_auc_score(y_test, y_pred_proba)
+        'roc_auc': roc_auc_score(y_test, y_pred_proba),
+        'pr_auc': pr_auc
     }
     
     cm = confusion_matrix(y_test, y_pred)
@@ -48,6 +52,7 @@ def evaluate_model(model, X_test, y_test, model_name="Model"):
     print(f"Recall:      {metrics['recall']:.4f}")
     print(f"F1-Score:    {metrics['f1']:.4f}")
     print(f"ROC-AUC:     {metrics['roc_auc']:.4f}")
+    print(f"PR-AUC:      {metrics['pr_auc']:.4f}")
     print(f"Specificity: {metrics['specificity']:.4f}")
     print(f"\nConfusion Matrix:")
     print(f"  True Negatives:  {tn:,}")
@@ -59,6 +64,7 @@ def evaluate_model(model, X_test, y_test, model_name="Model"):
     return {
         'predictions': y_pred,
         'probabilities': y_pred_proba,
+        'confusion_matrix': cm,
         'metrics': metrics
     }
 
