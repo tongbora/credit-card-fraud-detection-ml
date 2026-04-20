@@ -10,7 +10,7 @@ from sklearn.metrics import (
     roc_auc_score, confusion_matrix, classification_report,
     precision_recall_curve, auc
 )
-from config import METRICS_PATH
+from src.config import METRICS_PATH
 
 
 def evaluate_model(model, X_test, y_test, model_name="Model"):

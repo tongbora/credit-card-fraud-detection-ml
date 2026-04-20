@@ -16,8 +16,8 @@ from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 import xgboost as xgb
 import matplotlib.pyplot as plt
 
-from data_loader import load_data
-from preprocess import (
+from src.data_loader import load_data
+from src.preprocess import (
     drop_duplicates,
     handle_missing_values,
     prepare_features_target,
@@ -25,14 +25,14 @@ from preprocess import (
     scale_features,
     apply_smote,
 )
-from evaluate import evaluate_model, compare_models
-from utils import (
+from src.evaluate import evaluate_model, compare_models
+from src.utils import (
     plot_confusion_matrix,
     plot_roc_curve,
     plot_precision_recall_curve,
     plot_feature_importance,
 )
-from config import (
+from src.config import (
     DATA_PATH,
     MODELS_PATH,
     FIGURES_PATH,

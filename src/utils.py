@@ -12,7 +12,7 @@ from sklearn.metrics import (
     roc_curve, precision_recall_curve, auc, f1_score,
     precision_score, recall_score, accuracy_score
 )
-from config import FIGURES_PATH, METRICS_PATH
+from src.config import FIGURES_PATH, METRICS_PATH
 
 
 def compute_metrics(y_true, y_pred, y_pred_proba=None):

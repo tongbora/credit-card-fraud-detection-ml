@@ -9,7 +9,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from imblearn.over_sampling import SMOTE
 import joblib
-from config import (
+from src.config import (
     TEST_SIZE, RANDOM_STATE, STRATIFY_SPLIT, 
     SMOTE_RANDOM_STATE, SAMPLING_STRATEGY, MODELS_PATH, FEATURE_COLS
 )

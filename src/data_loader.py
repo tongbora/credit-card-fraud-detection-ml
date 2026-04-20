@@ -5,7 +5,7 @@ Handles loading and initial data exploration.
 
 import pandas as pd
 import numpy as np
-from config import DATA_PATH
+from src.config import DATA_PATH
 
 
 def load_data():

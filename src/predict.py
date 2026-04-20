@@ -6,7 +6,7 @@ Includes functions for making predictions and preparing data for predictions.
 import numpy as np
 import pandas as pd
 import joblib
-from config import MODELS_PATH
+from src.config import MODELS_PATH
 
 
 class FraudDetectionPredictor:
