@@ -108,6 +108,14 @@ Place `creditcard.csv` in the `data/` directory:
 credit-card-fraud-detection/data/creditcard.csv
 ```
 
+### ⬇️ How to Download
+ 
+**Option 1 – Kaggle Website**
+1. Go to [https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud)
+2. Sign in or create a free Kaggle account
+3. Click **Download** to get `creditcard.csv`
+4. Place the file in the `data/` folder of this project
+
 ### 3. Run Training Pipeline (No Notebooks Required)
 
 Run one command:
