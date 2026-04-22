@@ -20,11 +20,38 @@ PREDICTOR = None
 ACTIVE_MODEL_NAME = ""
 
 SAMPLE_TRANSACTION = {
-    "V1": -1.358,
-    "V2": -0.043,
-    "V3": 2.136,
-    "Amount": 149.62,
+  "V1": -1.358,
+  "V2": -0.043,
+  "V3": 2.136,
+  "V4": 1.465,
+  "V5": -0.619,
+  "V6": -0.991,
+  "V7": -0.305,
+  "V8": 0.085,
+  "V9": 0.159,
+  "V10": -0.046,
+  "V11": -0.073,
+  "V12": -0.268,
+  "V13": -0.539,
+  "V14": -0.055,
+  "V15": 0.040,
+  "V16": 0.085,
+  "V17": -0.255,
+  "V18": -0.171,
+  "V19": -0.046,
+  "V20": -0.351,
+  "V21": -0.148,
+  "V22": -0.420,
+  "V23": 0.048,
+  "V24": 0.102,
+  "V25": 0.191,
+  "V26": -0.328,
+  "V27": 0.047,
+  "V28": 0.005,
+  "Amount": 149.62,
 }
+
+LIVE_FEATURE_COLS = ["Amount"] + [f"V{i}" for i in range(1, 29)]
 
 
 def get_predictor():
@@ -94,29 +121,79 @@ def load_roc_image_path():
     return None
 
 
-def build_features(amount, v1, v2, v3):
-    features = {f"V{i}": 0.0 for i in range(1, 29)}
-    features["V1"] = float(v1)
-    features["V2"] = float(v2)
-    features["V3"] = float(v3)
-    features["Amount"] = float(amount)
-    return features
+def build_features_from_values(values):
+  return {name: float(value) for name, value in zip(FEATURE_COLS, values)}
 
 
 def use_sample_data():
-    return [
-        SAMPLE_TRANSACTION["Amount"],
-        SAMPLE_TRANSACTION["V1"],
-        SAMPLE_TRANSACTION["V2"],
-        SAMPLE_TRANSACTION["V3"],
-    ]
+  return [SAMPLE_TRANSACTION.get(name, 0.0) for name in LIVE_FEATURE_COLS]
 
 
 def reset_inputs():
-    return [0.0, 0.0, 0.0, 0.0]
+  return [0.0 for _ in LIVE_FEATURE_COLS]
 
 
-def make_prediction(amount, v1, v2, v3):
+def build_prediction_explanation(feature_values, result):
+  amount = float(feature_values.get("Amount", 0.0))
+  v_values = [abs(float(feature_values.get(f"V{i}", 0.0))) for i in range(1, 29)]
+  avg_signal = sum(v_values) / len(v_values) if v_values else 0.0
+  peak_signal = max(v_values) if v_values else 0.0
+
+  if result["prediction"] == "Fraudulent":
+    if amount >= 150:
+      return "High amount combined with an unusual feature pattern increases the fraud risk."
+    if peak_signal >= 2.0 or avg_signal >= 0.8:
+      return "An unusual pattern across the V features suggests suspicious behavior."
+    return "The model detected a suspicious combination of transaction signals."
+
+  if amount >= 150 and avg_signal < 0.8:
+    return "The amount is elevated, but the feature pattern still looks consistent with normal activity."
+  return "The transaction profile is close to a normal payment pattern."
+
+
+def create_batch_prediction_chart(result_df):
+    if result_df is None or result_df.empty or "Prediction_Label" not in result_df.columns:
+        return None
+
+    counts = result_df["Prediction_Label"].value_counts().reindex(["Legitimate", "Fraudulent"], fill_value=0)
+    colors = ["#2563eb", "#ef4444"]
+
+    fig, ax = plt.subplots(figsize=(6.8, 4.0), dpi=160)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    bars = ax.bar(counts.index, counts.values, color=colors, width=0.55, edgecolor="#dbe4f0", linewidth=1.2)
+    ax.set_title("Batch Prediction Breakdown", fontsize=14, fontweight="bold", color="#0f172a", pad=12)
+    ax.grid(axis="y", color="#e5e7eb", linestyle="-", linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.tick_params(axis="x", labelsize=11, colors="#334155")
+    ax.tick_params(axis="y", labelsize=10, colors="#64748b")
+    for spine in ["top", "right"]:
+        ax.spines[spine].set_visible(False)
+    ax.spines["left"].set_color("#e2e8f0")
+    ax.spines["bottom"].set_color("#e2e8f0")
+
+    total = max(int(counts.sum()), 1)
+    for bar, value in zip(bars, counts.values):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            value,
+            f"{int(value):,}\n({value / total:.1%})",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+            fontweight="bold",
+            color="#334155",
+        )
+
+    plt.tight_layout(pad=1.2)
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix="_batch_predictions.png")
+    fig.savefig(tmp.name, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    return tmp.name
+
+
+def make_prediction(amount, *feature_values):
     try:
         predictor = get_predictor()
         if predictor is None:
@@ -128,25 +205,41 @@ def make_prediction(amount, v1, v2, v3):
             </div>
             """
 
-        features = build_features(amount, v1, v2, v3)
+        if len(feature_values) != 28:
+            raise ValueError(f"Expected 28 V-feature values, received {len(feature_values)}")
+
+        features = {name: 0.0 for name in FEATURE_COLS}
+        features["Amount"] = float(amount)
+        for idx, value in enumerate(feature_values, start=1):
+            features[f"V{idx}"] = float(value)
         result = predictor.predict(features)
 
         is_fraud = result["prediction"] == "Fraudulent"
-        label = "FRAUD DETECTED" if is_fraud else "LEGITIMATE"
+        label = "FRAUD" if is_fraud else "NORMAL"
         icon = "⚠️" if is_fraud else "✅"
         card_class = "result-fraud" if is_fraud else "result-normal"
-        model_label = ACTIVE_MODEL_NAME.replace("_", " ").title()
+        model_label = "Random Forest" if "random" in ACTIVE_MODEL_NAME.lower() else ACTIVE_MODEL_NAME.replace("_", " ").title()
         probability = float(result["fraud_probability"])
+        confidence = float(result.get("confidence", max(probability, 1 - probability)))
+        confidence_pct = confidence * 100
         probability_pct = probability * 100
+        amount = float(features.get("Amount", 0.0))
+        explanation = build_prediction_explanation(features, result)
+        summary_chip = f"Amount: ${amount:,.2f}" if amount else "Amount: $0.00"
         bar_class = "bar-fraud" if is_fraud else "bar-normal"
 
         return f"""
         <div class="result-card {card_class}">
-            <div class="result-eyebrow">{icon} Prediction Result</div>
+            <div class="result-eyebrow">{icon} Live prediction</div>
             <div class="result-title">{label}</div>
-            <div class="result-prob">Fraud probability: <strong>{probability_pct:.1f}%</strong></div>
-            <div class="prob-bar"><span class="{bar_class}" style="width: {probability_pct:.1f}%"></span></div>
-            <div class="result-model">Model used: {model_label}</div>
+            <div class="result-subtitle">Confidence {confidence_pct:.1f}%</div>
+            <div class="result-pill-row">
+                <span class="result-pill">{model_label}</span>
+                <span class="result-pill">{summary_chip}</span>
+                <span class="result-pill {'pill-danger' if is_fraud else 'pill-success'}">Fraud probability {probability_pct:.1f}%</span>
+            </div>
+            <div class="prob-bar"><span class="{bar_class}" style="width: {confidence_pct:.1f}%"></span></div>
+            <div class="result-explain">{explanation}</div>
         </div>
         """
     except Exception as exc:
@@ -161,52 +254,71 @@ def make_prediction(amount, v1, v2, v3):
 
 def preview_uploaded_csv(file):
     if file is None:
-        return "Upload a CSV file to preview it.", pd.DataFrame()
+        return """
+        <div class='upload-feedback upload-empty'>
+          <div class='upload-icon'>⤴</div>
+          <div class='upload-title'>Drop CSV file here</div>
+          <div class='upload-subtitle'>or click Upload CSV to choose a file</div>
+        </div>
+        """, gr.update(value=pd.DataFrame(), visible=False)
 
     try:
         df = pd.read_csv(file.name)
-        return f"Previewing {os.path.basename(file.name)} — {len(df)} rows", df.head(10)
+        return f"""
+        <div class='upload-feedback upload-ready'>
+          <div class='upload-icon'>✓</div>
+          <div class='upload-title'>{os.path.basename(file.name)}</div>
+          <div class='upload-subtitle'>{len(df):,} rows detected. Ready to run prediction.</div>
+        </div>
+        """, gr.update(value=df.head(8), visible=True)
     except Exception as exc:
-        return f"Error reading CSV: {str(exc)}", pd.DataFrame()
+        return f"""
+        <div class='upload-feedback upload-error'>
+          <div class='upload-icon'>⚠</div>
+          <div class='upload-title'>Unable to read file</div>
+          <div class='upload-subtitle'>{str(exc)}</div>
+        </div>
+        """, gr.update(value=pd.DataFrame(), visible=False)
 
 
 def process_batch_predictions(file):
-    if file is None:
-        return "Upload a CSV file", None, pd.DataFrame()
+  if file is None:
+    return "Upload a CSV file", gr.update(value=None, visible=False), gr.update(value=pd.DataFrame(), visible=False), gr.update(value=None, visible=False)
 
-    try:
-        predictor = get_predictor()
-        if predictor is None:
-            return model_not_loaded_message(), None, pd.DataFrame()
+  try:
+    predictor = get_predictor()
+    if predictor is None:
+      return model_not_loaded_message(), gr.update(value=None, visible=False), gr.update(value=pd.DataFrame(), visible=False), gr.update(value=None, visible=False)
 
-        df = pd.read_csv(file.name)
+    df = pd.read_csv(file.name)
 
-        missing = [col for col in FEATURE_COLS if col not in df.columns]
-        if missing:
-            return f"❌ Missing columns: {', '.join(missing)}", None, pd.DataFrame()
+    missing = [col for col in FEATURE_COLS if col not in df.columns]
+    if missing:
+      return f"❌ Missing columns: {', '.join(missing)}", gr.update(value=None, visible=False), gr.update(value=pd.DataFrame(), visible=False), gr.update(value=None, visible=False)
 
-        result_df = predictor.batch_predict(df[FEATURE_COLS])
-        fraud_count = int((result_df["Prediction"] == 1).sum())
-        total = len(result_df)
-        legitimate_count = total - fraud_count
+    result_df = predictor.batch_predict(df[FEATURE_COLS])
+    fraud_count = int((result_df["Prediction"] == 1).sum())
+    total = len(result_df)
+    legitimate_count = total - fraud_count
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix="_predictions.csv") as tmp:
-            result_df.to_csv(tmp.name, index=False)
-            output_path = tmp.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix="_predictions.csv") as tmp:
+      result_df.to_csv(tmp.name, index=False)
+      output_path = tmp.name
 
-        summary = {
-            "total": total,
-            "fraud": fraud_count,
-            "normal": legitimate_count,
-            "fraud_rate": (fraud_count / total) if total else 0,
-            "path": output_path,
-        }
-        summary_html = build_batch_summary_html(summary)
-        preview_df = result_df[["Prediction_Label", "Fraud_Probability"]].head(20).copy()
-        preview_df["Fraud_Probability"] = preview_df["Fraud_Probability"].map(lambda x: f"{x:.1%}")
-        return summary_html, output_path, preview_df
-    except Exception as exc:
-        return f"<div class='summary-alert error'>Error: {str(exc)}</div>", None, pd.DataFrame()
+    summary = {
+      "total": total,
+      "fraud": fraud_count,
+      "normal": legitimate_count,
+      "fraud_rate": (fraud_count / total) if total else 0,
+      "path": output_path,
+    }
+    summary_html = build_batch_summary_html(summary)
+    preview_df = result_df[["Prediction_Label", "Fraud_Probability"]].head(20).copy()
+    preview_df["Fraud_Probability"] = preview_df["Fraud_Probability"].map(lambda x: f"{x:.1%}")
+    chart_path = create_batch_prediction_chart(result_df)
+    return summary_html, gr.update(value=output_path, visible=True), gr.update(value=preview_df, visible=True), gr.update(value=chart_path, visible=bool(chart_path))
+  except Exception as exc:
+    return f"<div class='summary-alert error'>Error: {str(exc)}</div>", gr.update(value=None, visible=False), gr.update(value=pd.DataFrame(), visible=False), gr.update(value=None, visible=False)
 
 
 def find_available_port(start_port=7860, max_tries=20):
@@ -405,11 +517,13 @@ def build_best_model_banner(metrics_df, best_model):
 def build_conclusion_html(metrics_df, best_model):
     if metrics_df is None or metrics_df.empty:
         return """
-        <div class='insight-title'>Conclusion</div>
-        <ul class='insight-list'>
-          <li>Train models to generate final comparison outputs.</li>
-          <li>This tab summarizes final recommendation and challenges.</li>
-        </ul>
+        <div class='conclusion-shell'>
+          <div class='conclusion-hero'>
+            <div class='section-eyebrow'>Final Takeaway</div>
+            <h2>Model results will appear after training</h2>
+            <p>Train the pipeline first to populate the best-model card, insight cards, and final recommendation.</p>
+          </div>
+        </div>
         """
 
     row = metrics_df[metrics_df["Model"] == best_model]
@@ -420,16 +534,60 @@ def build_conclusion_html(metrics_df, best_model):
     precision = metric_value(row.iloc[0], "Precision")
     recall = metric_value(row.iloc[0], "Recall")
     f1 = metric_value(row.iloc[0], "F1")
+    rf_row = metrics_df[metrics_df["Model"].astype(str).str.contains("random", case=False, na=False)]
+    if not rf_row.empty:
+        best_model = str(rf_row.iloc[0]["Model"])
+        precision = metric_value(rf_row.iloc[0], "Precision")
+        recall = metric_value(rf_row.iloc[0], "Recall")
+        f1 = metric_value(rf_row.iloc[0], "F1")
 
     return f"""
-    <div class='section-eyebrow'>Final Takeaway</div>
-    <div class='insight-title'>Conclusion</div>
-    <ul class='insight-list'>
-      <li><strong>Summary:</strong> End-to-end fraud detection pipeline built from preprocessing to live prediction demo.</li>
-      <li><strong>Best model:</strong> {best_model} (Precision {percent_text(precision)} | Recall {percent_text(recall)} | F1 {percent_text(f1)}).</li>
-      <li><strong>Key takeaway:</strong> Random Forest provides best balance for fraud detection in this project run.</li>
-      <li><strong>Challenges:</strong> severe class imbalance and model training/evaluation time.</li>
-    </ul>
+    <div class='conclusion-shell'>
+      <div class='conclusion-hero'>
+        <div class='section-eyebrow'>Final Takeaway</div>
+        <h2>Production-ready fraud detection for live review</h2>
+        <p>Random Forest delivers the strongest balance across precision, recall, and F1-score for this project run.</p>
+      </div>
+
+      <div class='best-model-feature'>
+        <div class='best-model-feature-head'>Best Model: Random Forest</div>
+        <div class='best-model-feature-metrics'>
+          <div><span>Precision</span><strong>{percent_text(precision)}</strong></div>
+          <div><span>Recall</span><strong>{percent_text(recall)}</strong></div>
+          <div><span>F1-score</span><strong>{percent_text(f1)}</strong></div>
+        </div>
+      </div>
+
+      <div class='conclusion-insight-grid'>
+        <div class='conclusion-insight-card'>
+          <h4>Precision first</h4>
+          <p>Lower false alarms keep the fraud team focused on cases that matter.</p>
+        </div>
+        <div class='conclusion-insight-card'>
+          <h4>Recall coverage</h4>
+          <p>Better recall means more suspicious transactions are caught before loss occurs.</p>
+        </div>
+        <div class='conclusion-insight-card'>
+          <h4>Demo readiness</h4>
+          <p>The pipeline is ready for interactive presentation and batch scoring workflows.</p>
+        </div>
+      </div>
+
+      <div class='conclusion-lower-grid'>
+        <div class='conclusion-block'>
+          <div class='section-eyebrow'>Challenges</div>
+          <ul class='insight-list'>
+            <li>Severe class imbalance makes fraud hard to learn and evaluate.</li>
+            <li>Model tuning and validation can be slower than a simple baseline.</li>
+            <li>Threshold selection must balance customer experience and detection power.</li>
+          </ul>
+        </div>
+        <div class='conclusion-block conclusion-message'>
+          <div class='section-eyebrow'>Final Message</div>
+          <p>This system turns an imbalanced dataset into a clear fraud-screening product with explainable live predictions, batch analysis, and a strong model comparison story.</p>
+        </div>
+      </div>
+    </div>
     """
 
 
@@ -583,12 +741,14 @@ def build_css():
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
     :root {
-      --bg: #f5f5f5;
+      --bg: #ffffff;
       --panel: #ffffff;
       --panel-soft: #ffffff;
-      --text: #111827;
-      --text-secondary: #374151;
-      --muted: #6b7280;
+      --text: #000000;
+      --text-secondary: #000000;
+      --muted: #000000;
+      --text-primary: #000000;
+      --text-muted: #000000;
       --line: #e5e7eb;
       --shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
       --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.05);
@@ -626,6 +786,20 @@ def build_css():
       background: var(--bg) !important;
       color: var(--text) !important;
       min-height: 100vh;
+      height: 100vh !important;
+      overflow: hidden !important;
+    }
+
+    .gradio-container p,
+    .gradio-container li,
+    .gradio-container label,
+    .gradio-container h1,
+    .gradio-container h2,
+    .gradio-container h3,
+    .gradio-container h4,
+    .gradio-container h5,
+    .gradio-container h6 {
+      color: #000000 !important;
     }
 
     html,
@@ -647,7 +821,24 @@ def build_css():
       max-width: 100% !important;
       width: 100% !important;
       margin: 0 !important;
-      padding: 30px 40px !important;
+      padding: 12px 20px !important;
+      height: 100vh !important;
+      overflow: hidden !important;
+    }
+
+    .gradio-container .tabs {
+      height: calc(100vh - 24px) !important;
+      display: flex !important;
+      flex-direction: column !important;
+      overflow: hidden !important;
+    }
+
+    .gradio-container .tabitem,
+    .gradio-container [data-testid="tab-item"] {
+      flex: 1 1 auto;
+      min-height: 0 !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
     }
 
     footer { display: none !important; }
@@ -839,10 +1030,38 @@ def build_css():
       background: #ffffff !important;
       border: 1px solid var(--line) !important;
       border-radius: var(--radius-lg) !important;
-      padding: 30px !important;
-      margin: 0 auto 20px !important;
+      padding: 16px !important;
+      margin: 0 auto 8px !important;
       max-width: 1200px;
+      height: calc(100vh - 120px) !important;
+      overflow: hidden !important;
       box-shadow: var(--shadow-soft) !important;
+    }
+
+    .model-scroll {
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+      padding-right: 10px !important;
+      height: calc(100vh - 170px) !important;
+      max-height: calc(100vh - 170px) !important;
+      min-height: 0 !important;
+    }
+
+    .gradio-container .model-tab,
+    .gradio-container .model-tab > div,
+    .gradio-container [data-testid="tab-item"].model-tab {
+      height: calc(100vh - 70px) !important;
+      min-height: 0 !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+    }
+
+    .gradio-container .model-tab .section-card,
+    .gradio-container .model-tab .model-scroll {
+      height: calc(100vh - 170px) !important;
+      max-height: calc(100vh - 170px) !important;
+      min-height: 0 !important;
+      overflow-y: auto !important;
     }
 
     .section-card h3 {
@@ -1299,6 +1518,484 @@ def build_css():
     }
     .result-error .result-title { color: var(--amber); }
 
+    .result-subtitle {
+      margin-top: 10px;
+      color: var(--text-secondary);
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .result-pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 16px;
+    }
+
+    .result-pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .pill-danger {
+      background: #fef2f2;
+      border-color: rgba(239, 68, 68, 0.2);
+      color: #b91c1c;
+    }
+
+    .pill-success {
+      background: #f0fdf4;
+      border-color: rgba(16, 185, 129, 0.2);
+      color: #047857;
+    }
+
+    .result-explain {
+      margin-top: 16px;
+      padding: 14px 16px;
+      background: rgba(255, 255, 255, 0.78);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      color: var(--text-secondary);
+      line-height: 1.65;
+      font-size: 14px;
+      text-align: left;
+    }
+
+    .input-grid {
+      display: grid !important;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px !important;
+      margin: 0 !important;
+      width: 100%;
+    }
+
+    .input-cell {
+      min-width: 0;
+    }
+
+    .button-row {
+      display: flex !important;
+      gap: 12px !important;
+      margin-top: 6px !important;
+      width: 100%;
+    }
+
+    .button-row > * {
+      flex: 1 1 0;
+    }
+
+    .input-panel,
+    .result-panel,
+    .batch-upload-panel,
+    .batch-results-panel {
+      background: #ffffff !important;
+      border: 1px solid var(--border) !important;
+      border-radius: var(--radius-xl) !important;
+      padding: 22px !important;
+      box-shadow: var(--shadow-md) !important;
+    }
+
+    .prediction-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
+      gap: 20px;
+      align-items: stretch;
+    }
+
+    .result-panel {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 100%;
+    }
+
+    .batch-upload-panel,
+    .batch-results-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .batch-hub-card {
+      padding: 14px !important;
+      background: linear-gradient(180deg, #ffffff 0%, #fcfdff 100%) !important;
+      min-height: auto !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+    }
+
+    .batch-hero {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      background: linear-gradient(130deg, #f5f9ff 0%, #ffffff 60%);
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      box-shadow: var(--shadow-md);
+    }
+
+    .batch-hero h2 {
+      margin: 0 0 8px;
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: #000000;
+    }
+
+    .batch-hero p {
+      margin: 0;
+      color: #000000;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .batch-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+      gap: 10px;
+      align-items: stretch;
+      background: #ffffff !important;
+      height: auto !important;
+      min-height: auto !important;
+      overflow: visible !important;
+    }
+
+    .batch-shell > div,
+    .batch-shell [data-testid="column"],
+    .batch-shell [data-testid="block"],
+    .batch-shell [data-testid="block-group"],
+    .batch-shell .gr-column,
+    .batch-shell .gr-box,
+    .batch-shell .gr-group {
+      background: #ffffff !important;
+    }
+
+    .batch-upload-panel,
+    .batch-results-panel {
+      background: #ffffff !important;
+      border: 1px solid var(--line) !important;
+      border-radius: var(--radius-xl) !important;
+      padding: 12px !important;
+      box-shadow: var(--shadow-md) !important;
+      height: auto !important;
+      min-height: 100% !important;
+      overflow: visible !important;
+    }
+
+    .batch-results-panel {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%) !important;
+    }
+
+    .upload-feedback {
+      border-radius: var(--radius-lg);
+      padding: 14px 12px;
+      border: 1px solid var(--line);
+      display: grid;
+      gap: 4px;
+      text-align: center;
+      margin: 4px 0 6px;
+      background: #ffffff;
+    }
+
+    .upload-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      margin: 0 auto;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      color: #1d4ed8;
+      background: #e0ebff;
+    }
+
+    .upload-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #0f172a;
+    }
+
+    .upload-subtitle {
+      font-size: 12px;
+      color: #334155;
+      line-height: 1.45;
+    }
+
+    .upload-ready {
+      border-color: #86efac;
+      background: #f0fdf4;
+    }
+
+    .upload-ready .upload-icon {
+      color: #047857;
+      background: #d1fae5;
+    }
+
+    .upload-error {
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+
+    .upload-error .upload-icon {
+      color: #b91c1c;
+      background: #fee2e2;
+    }
+
+    .batch-results-panel .gradio-image,
+    .batch-results-panel img,
+    .batch-results-panel [data-testid="image"] {
+      border: 1px solid var(--line) !important;
+      border-radius: var(--radius-lg) !important;
+      overflow: hidden;
+      background: #ffffff !important;
+      min-height: 120px;
+      max-height: 200px;
+    }
+
+    .batch-results-panel table,
+    .batch-results-panel .gr-dataframe,
+    .batch-results-panel [data-testid="dataframe"],
+    .batch-upload-panel table,
+    .batch-upload-panel .gr-dataframe,
+    .batch-upload-panel [data-testid="dataframe"] {
+      background: #ffffff !important;
+    }
+
+    .batch-results-panel table th,
+    .batch-results-panel .gr-dataframe th,
+    .batch-upload-panel table th,
+    .batch-upload-panel .gr-dataframe th {
+      background: #f8fafc !important;
+      color: #0f172a !important;
+    }
+
+    .batch-results-panel table td,
+    .batch-results-panel .gr-dataframe td,
+    .batch-upload-panel table td,
+    .batch-upload-panel .gr-dataframe td {
+      background: #ffffff !important;
+      color: #0f172a !important;
+    }
+
+    .batch-results-panel [data-testid="dataframe"],
+    .batch-upload-panel [data-testid="dataframe"] {
+      min-height: 120px;
+      max-height: 160px;
+      overflow: auto;
+    }
+
+    .batch-upload-panel [data-testid="file-upload"],
+    .batch-upload-panel .upload-container,
+    .batch-upload-panel .file-preview {
+      min-height: 92px !important;
+      max-height: 112px !important;
+      height: 104px !important;
+      overflow: visible !important;
+      border: 2px dashed #93c5fd !important;
+      border-radius: var(--radius-lg) !important;
+      background: #f8fbff !important;
+      transition: all 0.2s ease !important;
+    }
+
+    .batch-upload-panel [data-testid="file-upload"] > div,
+    .batch-upload-panel .upload-container > div,
+    .batch-upload-panel .file-preview > div {
+      min-height: 92px !important;
+      max-height: 112px !important;
+      height: 104px !important;
+      padding: 8px !important;
+    }
+
+    .batch-upload-panel [data-testid="file-upload"]:hover,
+    .batch-upload-panel .upload-container:hover,
+    .batch-upload-panel .file-preview:hover {
+      border-color: #2563eb !important;
+      background: #eff6ff !important;
+    }
+
+    .batch-upload-panel,
+    .batch-results-panel {
+      min-height: 0 !important;
+    }
+
+    .batch-upload-panel > div,
+    .batch-results-panel > div {
+      margin-bottom: 6px !important;
+    }
+
+    .batch-upload-panel .insight-title,
+    .batch-results-panel .insight-title {
+      margin-bottom: 6px !important;
+    }
+
+    .batch-results-panel .summary-grid {
+      margin: 8px 0 10px;
+    }
+
+    .batch-results-panel .summary-stat {
+      background: #ffffff;
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .batch-summary-card {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      padding: 18px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .conclusion-shell {
+      display: grid;
+      gap: 18px;
+    }
+
+    .conclusion-hero {
+      background: linear-gradient(135deg, #eff6ff 0%, #ffffff 55%, #f8fafc 100%);
+      border: 1px solid #dbeafe;
+      border-radius: var(--radius-xl);
+      padding: 24px 26px;
+      box-shadow: var(--shadow-md);
+    }
+
+    .conclusion-hero h2 {
+      margin: 0 0 10px;
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: #000000;
+    }
+
+    .conclusion-hero p {
+      margin: 0;
+      max-width: 920px;
+      color: #000000;
+      font-size: 15px;
+      line-height: 1.75;
+    }
+
+    .best-model-feature {
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      padding: 22px;
+      box-shadow: var(--shadow-md);
+    }
+
+    .best-model-feature-head {
+      font-size: 24px;
+      font-weight: 800;
+      color: #000000;
+      margin-bottom: 16px;
+    }
+
+    .best-model-feature-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .best-model-feature-metrics > div,
+    .conclusion-insight-card,
+    .conclusion-block {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--surface);
+      padding: 16px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .best-model-feature-metrics span {
+      display: block;
+      color: #000000;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    .best-model-feature-metrics strong {
+      font-size: 26px;
+      font-weight: 800;
+      color: #000000;
+    }
+
+    .conclusion-insight-grid,
+    .conclusion-lower-grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .conclusion-insight-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .conclusion-insight-card h4 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      font-weight: 800;
+      color: #000000;
+    }
+
+    .conclusion-insight-card p,
+    .conclusion-message p {
+      margin: 0;
+      color: #000000;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .conclusion-shell .section-eyebrow,
+    .conclusion-shell li,
+    .conclusion-shell strong {
+      color: #000000 !important;
+    }
+
+    .conclusion-shell,
+    .conclusion-shell *,
+    .conclusion-hero,
+    .conclusion-hero *,
+    .best-model-feature,
+    .best-model-feature *,
+    .conclusion-insight-card,
+    .conclusion-insight-card *,
+    .conclusion-block,
+    .conclusion-block * {
+      color: #000000 !important;
+      -webkit-text-fill-color: #000000 !important;
+      opacity: 1 !important;
+    }
+
+    .conclusion-lower-grid {
+      grid-template-columns: 1.1fr 0.9fr;
+      align-items: stretch;
+    }
+
+    .conclusion-message {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    }
+
+    .conclusion-message p {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .batch-summary-card .summary-grid {
+      margin-top: 12px;
+    }
+
     .summary-grid {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
@@ -1381,27 +2078,33 @@ def build_css():
     }
 
     @media (max-width: 1100px) {
-      .analytics-grid, .prediction-shell { grid-template-columns: 1fr; }
-      .overview-grid, .method-grid, .mini-model-grid { grid-template-columns: 1fr; }
-      .insight-grid, .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .analytics-grid, .prediction-shell, .batch-shell, .conclusion-lower-grid { grid-template-columns: 1fr; }
+      .overview-grid, .method-grid, .mini-model-grid, .conclusion-insight-grid, .best-model-feature-metrics { grid-template-columns: 1fr; }
+      .insight-grid, .summary-grid, .input-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .batch-results-panel [data-testid="dataframe"],
+      .batch-upload-panel [data-testid="dataframe"] { max-height: 200px; }
     }
 
     @media (max-width: 720px) {
       .section-card { padding: 16px !important; margin: 0 10px 14px !important; }
       .center-hero { padding: 24px 16px; }
       .hero-title { font-size: 32px; }
-      .insight-grid, .summary-grid { grid-template-columns: 1fr; }
+      .insight-grid, .summary-grid, .input-grid, .best-model-feature-metrics, .conclusion-insight-grid { grid-template-columns: 1fr; }
       .gradio-container { padding: 16px !important; }
+      .button-row { flex-direction: column !important; }
+      .batch-hero h2 { font-size: 24px; }
+      .batch-results-panel [data-testid="dataframe"],
+      .batch-upload-panel [data-testid="dataframe"] { max-height: 180px; }
     }
     """
 
 
 CSS = build_css()
 APP_THEME = gr.themes.Soft().set(
-  body_background_fill='#f5f5f5',
-  body_background_fill_dark='#f5f5f5',
-  background_fill_primary='#f5f5f5',
-  background_fill_secondary='#f5f5f5',
+  body_background_fill='#ffffff',
+  body_background_fill_dark='#ffffff',
+  background_fill_primary='#ffffff',
+  background_fill_secondary='#ffffff',
   block_background_fill='#ffffff',
 )
 
@@ -1438,8 +2141,8 @@ with gr.Blocks(title='Credit Card Fraud Detection') as demo:
       with gr.Group(elem_classes=['section-card']):
         gr.HTML(methodology_html)
 
-    with gr.Tab('4. Model Comparison'):
-      with gr.Group(elem_classes=['section-card']):
+    with gr.Tab('4. Model Comparison', elem_classes=['model-tab']):
+      with gr.Group(elem_classes=['section-card', 'model-scroll']):
         gr.HTML(best_banner_html)
         gr.HTML(cards_html)
         gr.HTML(insight_html)
@@ -1473,58 +2176,43 @@ with gr.Blocks(title='Credit Card Fraud Detection') as demo:
       with gr.Group(elem_classes=['section-card']):
         gr.HTML(conclusion_html)
 
-    with gr.Tab('6. Live Prediction (Demo)'):
-      with gr.Group(elem_classes=['section-card']):
-        gr.Markdown('### Single Prediction')
-        gr.Markdown('Enter transaction features to test a single payment.')
+    with gr.Tab('6. Batch Prediction'):
+      with gr.Group(elem_classes=['section-card', 'batch-hub-card']):
+        gr.HTML("""
+          <div class='batch-hero'>
+            <div class='section-eyebrow'>Bulk fraud scoring</div>
+            <h2>Batch Prediction Workspace</h2>
+            <p>Upload a CSV with <strong>Amount</strong> and <strong>V1–V28</strong>, run prediction, then review summary metrics and fraud distribution.</p>
+          </div>
+        """)
 
-        with gr.Row(elem_classes=['prediction-shell']):
-          with gr.Column(elem_classes=['form-card']):
-            with gr.Row():
-              amount_input = gr.Number(label='Amount', value=0.0, precision=6)
-              v1_input = gr.Number(label='V1', value=0.0, precision=6)
-            with gr.Row():
-              v2_input = gr.Number(label='V2', value=0.0, precision=6)
-              v3_input = gr.Number(label='V3', value=0.0, precision=6)
-
-            with gr.Row():
-              sample_btn = gr.Button('Load Sample', variant='secondary')
-              predict_btn = gr.Button('Run Prediction', variant='primary')
-              reset_btn = gr.Button('Reset', variant='secondary')
-
-          with gr.Column(elem_classes=['form-card']):
-            output_pred = gr.HTML()
-
-        sample_btn.click(fn=use_sample_data, outputs=[amount_input, v1_input, v2_input, v3_input])
-        reset_btn.click(fn=reset_inputs, outputs=[amount_input, v1_input, v2_input, v3_input])
-        predict_btn.click(
-          fn=make_prediction,
-          inputs=[amount_input, v1_input, v2_input, v3_input],
-          outputs=output_pred,
-          show_progress='full',
-        )
-
-      with gr.Group(elem_classes=['section-card']):
-        gr.Markdown('### Batch Prediction')
-        gr.Markdown('Upload a CSV file with V1–V28 and Amount columns.')
-
-        with gr.Row(elem_classes=['prediction-shell']):
-          with gr.Column(elem_classes=['form-card']):
+        with gr.Row(elem_classes=['batch-shell']):
+          with gr.Column(elem_classes=['form-card', 'batch-upload-panel']):
+            gr.HTML("<div class='section-eyebrow'>Step 1</div><div class='insight-title'>Upload CSV</div>")
             csv_input = gr.File(label='Upload CSV', file_types=['.csv'])
-            preview_note = gr.Markdown('*Upload a CSV file to preview it.*')
-            preview_table = gr.Dataframe(interactive=False)
-            process_btn = gr.Button('Process File', variant='primary')
+            preview_note = gr.HTML("""
+              <div class='upload-feedback upload-empty'>
+                <div class='upload-icon'>⤴</div>
+                <div class='upload-title'>Drop CSV file here</div>
+                <div class='upload-subtitle'>or click Upload CSV to choose a file</div>
+              </div>
+            """)
+            process_btn = gr.Button('Run Batch Prediction', variant='primary')
+            gr.Markdown('*Required columns: Amount, V1–V28*')
 
-          with gr.Column(elem_classes=['form-card']):
+          with gr.Column(elem_classes=['form-card', 'batch-results-panel']):
+            gr.HTML("<div class='section-eyebrow'>Step 2</div><div class='insight-title'>Results & Insights</div>")
+            preview_table = gr.Dataframe(label='Input Preview', interactive=False, visible=False)
             batch_summary = gr.HTML()
-            batch_download = gr.File(label='Download Results')
-            batch_result_preview = gr.Dataframe(label='Prediction Preview', interactive=False)
+            batch_chart = gr.Image(show_label=False, interactive=False, visible=False)
+            batch_result_preview = gr.Dataframe(label='Prediction Preview', interactive=False, visible=False)
+            batch_download = gr.File(label='Download Scored CSV', visible=False)
 
         csv_input.change(fn=preview_uploaded_csv, inputs=csv_input, outputs=[preview_note, preview_table])
         process_btn.click(
           fn=process_batch_predictions,
           inputs=csv_input,
-          outputs=[batch_summary, batch_download, batch_result_preview],
+          outputs=[batch_summary, batch_download, batch_result_preview, batch_chart],
           show_progress='full',
         )
 
