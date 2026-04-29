@@ -36,14 +36,6 @@ credit-card-fraud-detection/
 ├── data/
 │   └── creditcard.csv                 # Main dataset
 │
-├── notebooks/
-│   ├── 01_eda.ipynb                  # Exploratory Data Analysis
-│   ├── 02_preprocessing.ipynb        # Data Preprocessing & SMOTE
-│   ├── 03_model_logistic_regression.ipynb  # Logistic Regression training
-│   ├── 04_model_random_forest.ipynb       # Random Forest training
-│   ├── 05_model_xgboost.ipynb           # XGBoost training
-│   └── 06_final_comparison.ipynb        # Model comparison & selection
-│
 ├── src/
 │   ├── __init__.py
 │   ├── config.py                     # Configuration & constants
@@ -52,34 +44,26 @@ credit-card-fraud-detection/
 │   ├── train.py                     # Model training functions
 │   ├── evaluate.py                  # Model evaluation
 │   ├── predict.py                   # Prediction utilities
-│   └── utils.py                     # Visualization & metric helpers
+│   ├── smote_data.pkl               # SMOTE-processed data
+│   └── feature_cols.pkl             # Feature column names
 │
+├── outputs/
+│   ├── metrics/                     # Evaluation metrics tables
+│   │   └── model_comparison.csv
+│
+├── app.py                           # Gradio web interface
 ├── models/
 │   ├── logistic_regression.pkl      # Trained LR model
 │   ├── random_forest.pkl            # Trained RF model
-│   ├── xgboost.pkl                  # Trained XGBoost model (BEST)
+│   ├── xgboost.pkl                  # Trained XGBoost model
 │   ├── scaler.pkl                   # Feature scaler
 │   ├── baseline_data.pkl            # Baseline preprocessed data
 │   ├── smote_data.pkl               # SMOTE-processed data
 │   └── feature_cols.pkl             # Feature column names
 │
-├── outputs/
-│   ├── figures/                     # Saved visualizations
-│   │   ├── 01_class_distribution.png
-│   │   ├── 02_amount_distribution.png
-│   │   ├── 03_top_correlations.png
-│   │   ├── cm_*.png                (confusion matrices)
-│   │   ├── roc_pr_*.png            (ROC & PR curves)
-│   │   ├── feature_importance_*.png
-│   │   └── model_comparison_summary.png
-│   ├── metrics/                     # Evaluation metrics tables
-│   │   └── model_comparison.csv
-│   └── reports/                     # Summary reports
-│
-├── app.py                           # Gradio web interface
+├── ui_styles.css                    # UI styling overrides
 ├── requirements.txt                 # Python dependencies
 ├── README.md                        # This file
-├── presentation_notes.md            # Presentation guide & Q&A
 └── .gitignore                       # Git ignore rules
 ```
 
@@ -130,7 +114,7 @@ This command runs end-to-end:
 - baseline + SMOTE training flow
 - Logistic Regression, Random Forest, and XGBoost training
 - practical randomized tuning (student-laptop friendly)
-- evaluation + figure generation
+- evaluation + metric saving
 - model and metrics saving (including `models/best_model.pkl`)
 
 ### 4. Launch Web Interface
@@ -147,20 +131,19 @@ python app.py
 
 ## 📊 Model Performance Summary
 
-| Metric | Logistic Regression | Random Forest | XGBoost (BEST) |
+| Metric | Logistic Regression | Random Forest (BEST) | XGBoost |
 |--------|--------------------|--------------|----|
-| Accuracy | 0.9960 | 0.9987 | 0.9988 |
-| Precision | 0.7500 | 0.9000 | 0.8750 |
-| Recall | 0.7500 | 0.8000 | 0.9000 |
-| F1-Score | 0.7500 | 0.8485 | 0.8868 |
-| ROC-AUC | 0.9500 | 0.9821 | 0.9880 |
-| Specificity | 0.9999 | 0.9998 | 0.9997 |
+| Accuracy | 0.9873 | 0.9994 | 0.9990 |
+| Precision | 0.1051 | 0.8987 | 0.6696 |
+| Recall | 0.8737 | 0.7474 | 0.7895 |
+| F1-Score | 0.1876 | 0.8161 | 0.7246 |
+| ROC-AUC | 0.9619 | 0.9649 | 0.9685 |
+| Specificity | 0.9875 | 0.9999 | 0.9993 |
 
-**Best Model: XGBoost**
-- Highest ROC-AUC score
-- Best recall (catches 90% of frauds)
-- Good precision-recall balance
-- Optimal for fraud detection
+**Best Model: Random Forest**
+- Highest F1-score (0.8161)
+- Highest precision (0.8987)
+- Strong accuracy and specificity
 
 ---
 
@@ -180,7 +163,6 @@ python app.py
 - **Gradio** - Interactive web dashboard
 
 ### Development
-- **Jupyter** - Notebook interface
 - **joblib** - Model serialization
 
 ---
@@ -206,57 +188,49 @@ python app.py
 - XGBoost (advanced boosting)
 
 ### 4. **Proper Evaluation**
-- Confusion matrices
-- ROC-AUC curves
-- Precision-Recall curves
 - Classification reports
-- Feature importance analysis
+- ROC-AUC and PR-AUC
+- Precision, recall, and F1-score
 
 ### 5. **Interactive Web Interface**
 - Project overview
+- Data insights
+- Methodology summary
 - Model comparison
-- Single prediction
+- Conclusion highlights
 - Batch prediction with CSV upload
-- EDA visualizations
-- Presentation helper
 
 ---
 
 ## 🔍 How to Use the Web Interface
 
-### Tab 1: Project Overview
+### Tab 1: Overview
 - Project objective and context
 - Dataset summary
 - Why fraud detection matters
 - Solution approach
 
-### Tab 2: Model Comparison
+### Tab 2: Data & Insights
+- Class distribution visualization
+- Key dataset takeaways
+
+### Tab 3: Methodology
+- Preprocessing steps
+- Modeling approach
+- Evaluation focus
+
+### Tab 4: Model Comparison
 - Performance metrics table
-- Confusion matrices
-- ROC and PR curves
-- Feature importance plots
+- Metric comparison charts
 
-### Tab 3: Single Prediction
-- Enter transaction features (V1-V28, Amount)
-- Get real-time predictions
-- See fraud probability
+### Tab 5: Conclusion
+- Best model summary
+- Recommended next steps
 
-### Tab 4: Batch Prediction
+### Tab 6: Batch Prediction
 - Upload CSV with multiple transactions
 - Download predictions
 - See summary statistics
-
-### Tab 5: EDA & Insights
-- Class distribution visualization
-- Amount distribution patterns
-- Feature importance rankings
-- Key insights
-
-### Tab 6: Presentation Helper
-- Problem statement bullets
-- Methodology explanation
-- Results summary
-- Likely Q&A with answers
 
 ---
 
@@ -282,14 +256,13 @@ python app.py
 ### Data Science Communication
 ✅ Clear visualizations  
 ✅ Comprehensive documentation  
-✅ Presentation-ready materials  
 ✅ Interpretable models  
 
 ---
 
 ## 📝 Understanding the Code
 
-### key.py (Configuration)
+### config.py (Configuration)
 Centralized settings: paths, hyperparameters, random seeds
 
 ### data_loader.py
@@ -342,23 +315,12 @@ pip install xgboost
 ```
 
 ### Model files not found
-Ensure you've run all training notebooks and they completed successfully.
+Ensure you've run `python src/train.py` successfully.
 
 ### Gradio port already in use
 ```bash
 python app.py --server_port 7861  # Use different port
 ```
-
----
-
-## 📢 Presentation Tips
-
-1. **Start with the problem:** "Only 0.17% of transactions are fraudulent - that's imbalanced!"
-2. **Highlight the challenge:** "Accuracy alone is misleading; we need better metrics"
-3. **Show your approach:** Walk through preprocessing, SMOTE, model selection
-4. **Focus on results:** "XGBoost catches 90% of frauds with high precision"
-5. **Use the interface:** Demonstrate predictions and visualizations live
-6. **Discuss trade-offs:** Explain the balance between recall and precision
 
 ---
 
@@ -380,9 +342,9 @@ python app.py --server_port 7861  # Use different port
 **Project:** Credit Card Fraud Detection - Final Year ML Project
 
 **Implemented Algorithms:**
-- Logistic Regression: [Your Name / Placeholder]
-- Random Forest: [Your Name / Placeholder]
-- XGBoost: [Your Name / Placeholder]
+- Logistic Regression: Chea Chanrithyyuth
+- Random Forest: Tong Bora
+- XGBoost: Dorn Dana
 
 ---
 
@@ -390,18 +352,9 @@ python app.py --server_port 7861  # Use different port
 
 This project is for educational purposes. Use freely for learning and demonstrations.
 
----
-
-## 📞 Support
-
-For questions or issues:
-1. Check `presentation_notes.md` for Q&A
-2. Review notebook comments for exploration-only explanations
-3. Check code docstrings for function details
-4. Consult README sections above
 
 ---
 
 **Last Updated:** April 2026  
 **Version:** 1.0  
-**Status:** Complete & Ready for Presentation
+**Status:** Complete

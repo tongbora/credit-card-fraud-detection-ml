@@ -4,6 +4,7 @@ import os
 import sys
 import socket
 import tempfile
+import html
 import pandas as pd
 import gradio as gr
 import matplotlib
@@ -256,45 +257,48 @@ def preview_uploaded_csv(file):
     if file is None:
         return """
         <div class='upload-feedback upload-empty'>
-          <div class='upload-icon'>⤴</div>
-          <div class='upload-title'>Drop CSV file here</div>
-          <div class='upload-subtitle'>or click Upload CSV to choose a file</div>
+          <div class='upload-icon'>UP</div>
+          <div class='upload-title'>No file selected</div>
+          <div class='upload-subtitle'>Amount and V1-V28 columns are required for scoring.</div>
         </div>
         """, gr.update(value=pd.DataFrame(), visible=False)
 
     try:
         df = pd.read_csv(file.name)
+        filename = html.escape(os.path.basename(file.name))
         return f"""
         <div class='upload-feedback upload-ready'>
-          <div class='upload-icon'>✓</div>
-          <div class='upload-title'>{os.path.basename(file.name)}</div>
+          <div class='upload-icon'>OK</div>
+          <div class='upload-title'>{filename}</div>
           <div class='upload-subtitle'>{len(df):,} rows detected. Ready to run prediction.</div>
         </div>
         """, gr.update(value=df.head(8), visible=True)
     except Exception as exc:
+        message = html.escape(str(exc))
         return f"""
         <div class='upload-feedback upload-error'>
-          <div class='upload-icon'>⚠</div>
+          <div class='upload-icon'>!</div>
           <div class='upload-title'>Unable to read file</div>
-          <div class='upload-subtitle'>{str(exc)}</div>
+          <div class='upload-subtitle'>{message}</div>
         </div>
         """, gr.update(value=pd.DataFrame(), visible=False)
 
 
 def process_batch_predictions(file):
   if file is None:
-    return "Upload a CSV file", gr.update(value=None, visible=False), gr.update(value=pd.DataFrame(), visible=False), gr.update(value=None, visible=False)
+    return build_batch_alert_html("Upload a CSV file before running prediction."), gr.update(value=None, visible=False), gr.update(value=build_batch_empty_state_html(), visible=True), gr.update(value=None, visible=False)
 
   try:
     predictor = get_predictor()
     if predictor is None:
-      return model_not_loaded_message(), gr.update(value=None, visible=False), gr.update(value=pd.DataFrame(), visible=False), gr.update(value=None, visible=False)
+      return build_batch_alert_html(model_not_loaded_message()), gr.update(value=None, visible=False), gr.update(value=build_batch_empty_state_html(), visible=True), gr.update(value=None, visible=False)
 
     df = pd.read_csv(file.name)
 
     missing = [col for col in FEATURE_COLS if col not in df.columns]
     if missing:
-      return f"❌ Missing columns: {', '.join(missing)}", gr.update(value=None, visible=False), gr.update(value=pd.DataFrame(), visible=False), gr.update(value=None, visible=False)
+      missing_cols = html.escape(", ".join(missing))
+      return build_batch_alert_html(f"Missing columns: {missing_cols}"), gr.update(value=None, visible=False), gr.update(value=build_batch_empty_state_html(), visible=True), gr.update(value=None, visible=False)
 
     result_df = predictor.batch_predict(df[FEATURE_COLS])
     fraud_count = int((result_df["Prediction"] == 1).sum())
@@ -314,11 +318,12 @@ def process_batch_predictions(file):
     }
     summary_html = build_batch_summary_html(summary)
     preview_df = result_df[["Prediction_Label", "Fraud_Probability"]].head(20).copy()
-    preview_df["Fraud_Probability"] = preview_df["Fraud_Probability"].map(lambda x: f"{x:.1%}")
+    preview_html = build_prediction_preview_html(preview_df)
     chart_path = create_batch_prediction_chart(result_df)
-    return summary_html, gr.update(value=output_path, visible=True), gr.update(value=preview_df, visible=True), gr.update(value=chart_path, visible=bool(chart_path))
+    return summary_html, gr.update(value=output_path, visible=True), gr.update(value=preview_html, visible=True), gr.update(value=chart_path, visible=bool(chart_path))
   except Exception as exc:
-    return f"<div class='summary-alert error'>Error: {str(exc)}</div>", gr.update(value=None, visible=False), gr.update(value=pd.DataFrame(), visible=False), gr.update(value=None, visible=False)
+    message = html.escape(str(exc))
+    return f"<div class='summary-alert error'>Error: {message}</div>", gr.update(value=None, visible=False), gr.update(value=build_batch_empty_state_html(), visible=True), gr.update(value=None, visible=False)
 
 
 def find_available_port(start_port=7860, max_tries=20):
@@ -415,7 +420,7 @@ def create_class_distribution_chart(summary):
 def build_overview_html():
     return """
     <div class='center-hero'>
-      <div class='hero-kicker'>Interactive Presentation Dashboard</div>
+      <div class='hero-kicker'>Interactive Analytics Dashboard</div>
       <h1 class='hero-title'>Credit Card Fraud Detection</h1>
       <p class='hero-subtitle'>Detect fraudulent transactions using machine learning.</p>
       <div class='overview-grid'>
@@ -433,18 +438,69 @@ def build_overview_html():
 
 
 def build_data_insights_html(summary):
+    total = max(int(summary["total"]), 1)
+    normal = int(summary["normal"])
+    fraud = int(summary["fraud"])
+    fraud_rate = float(summary["fraud_rate"])
+    normal_rate = normal / total
+    normal_per_fraud = normal / fraud if fraud else 0
+    fraud_per_10k = fraud_rate * 10000
+    fraud_bar_width = max(fraud_rate * 100, 1.8)
     return f"""
-    <div class='section-eyebrow'>Dataset & Imbalance Insight</div>
-    <div class='insight-title'>Credit Card Transaction Dataset</div>
-    <div class='insight-grid'>
-      <div class='insight-item'><span>Total transactions</span><strong>{summary['total']:,}</strong></div>
-      <div class='insight-item'><span>Normal transactions</span><strong>{summary['normal']:,}</strong></div>
-      <div class='insight-item'><span>Fraud transactions</span><strong>{summary['fraud']:,}</strong></div>
-      <div class='insight-item'><span>Fraud ratio</span><strong>{percent_text(summary['fraud_rate'])}</strong></div>
-    </div>
-    <div class='imbalance-note'>
-      Fraud is a rare-event class. This imbalance can make naive models appear accurate while still missing actual fraud.
-      That is why we prioritize precision, recall, and F1-score rather than plain accuracy.
+    <div class='data-page-shell'>
+      <div class='data-hero'>
+        <div>
+          <div class='section-eyebrow'>Dataset & Imbalance Insight</div>
+          <h2>Credit Card Transaction Dataset</h2>
+          <p>Fraud is rare in the data, so the interface highlights the minority class instead of letting the normal class dominate the story.</p>
+        </div>
+        <div class='imbalance-callout'>
+          <span>Fraud ratio</span>
+          <strong>{percent_text(fraud_rate)}</strong>
+        </div>
+      </div>
+
+      <div class='data-stat-grid'>
+        <div class='data-stat-card total'><span>Total transactions</span><strong>{total:,}</strong><small>Full scored dataset</small></div>
+        <div class='data-stat-card normal'><span>Normal transactions</span><strong>{normal:,}</strong><small>{percent_text(normal_rate)} of rows</small></div>
+        <div class='data-stat-card fraud'><span>Fraud transactions</span><strong>{fraud:,}</strong><small>{fraud_per_10k:.1f} per 10,000 rows</small></div>
+        <div class='data-stat-card ratio'><span>Class pressure</span><strong>{normal_per_fraud:,.0f}:1</strong><small>Normal to fraud</small></div>
+      </div>
+
+      <div class='data-lower-grid'>
+        <div class='distribution-card'>
+          <div class='panel-heading'>
+            <div>
+              <div class='section-eyebrow'>Class distribution</div>
+              <h3>Normal activity overwhelms the signal</h3>
+            </div>
+          </div>
+
+          <div class='class-bars'>
+            <div class='class-row normal'>
+              <div class='class-row-head'><span>Normal</span><strong>{normal:,}</strong></div>
+              <div class='class-track'><i style='width: 100%'></i></div>
+              <div class='class-foot'>{percent_text(normal_rate)} of all transactions</div>
+            </div>
+            <div class='class-row fraud'>
+              <div class='class-row-head'><span>Fraud</span><strong>{fraud:,}</strong></div>
+              <div class='class-track'><i style='width: {fraud_bar_width:.2f}%'></i></div>
+              <div class='class-foot'>{percent_text(fraud_rate)} of all transactions</div>
+            </div>
+          </div>
+        </div>
+
+        <div class='data-interpret-card'>
+          <div class='section-eyebrow'>Modeling implication</div>
+          <h3>Accuracy alone is not enough</h3>
+          <p>A model can look accurate while missing most fraud cases. This project therefore focuses on precision, recall, F1-score, and probability-based review workflows.</p>
+          <div class='data-priority-list'>
+            <div><strong>Precision</strong><span>Controls false alarms.</span></div>
+            <div><strong>Recall</strong><span>Finds more fraudulent transactions.</span></div>
+            <div><strong>F1-score</strong><span>Balances review quality and coverage.</span></div>
+          </div>
+        </div>
+      </div>
     </div>
     """
 
@@ -506,10 +562,21 @@ def build_best_model_banner(metrics_df, best_model):
         best_model = str(row.iloc[0]["Model"])
 
     best_f1 = metric_value(row.iloc[0], "F1")
+    precision = metric_value(row.iloc[0], "Precision")
+    recall = metric_value(row.iloc[0], "Recall")
+    safe_model = html.escape(str(best_model))
     return f"""
     <div class='best-model-banner'>
-      <strong>Best Model: {best_model}</strong>
-      <span>Why: highest F1-score ({best_f1:.4f}) with strong precision-recall balance.</span>
+      <div>
+        <span class='banner-kicker'>Best overall model</span>
+        <strong>{safe_model}</strong>
+        <p>Highest F1-score with the strongest precision-recall balance for review workflows.</p>
+      </div>
+      <div class='banner-score-grid'>
+        <div><span>Precision</span><strong>{percent_text(precision)}</strong></div>
+        <div><span>Recall</span><strong>{percent_text(recall)}</strong></div>
+        <div><span>F1-score</span><strong>{percent_text(best_f1)}</strong></div>
+      </div>
     </div>
     """
 
@@ -569,7 +636,7 @@ def build_conclusion_html(metrics_df, best_model):
         </div>
         <div class='conclusion-insight-card'>
           <h4>Demo readiness</h4>
-          <p>The pipeline is ready for interactive presentation and batch scoring workflows.</p>
+          <p>The pipeline is ready for interactive analysis and batch scoring workflows.</p>
         </div>
       </div>
 
@@ -596,19 +663,32 @@ def build_model_cards_html(metrics_df, best_model):
         return "<div class='empty-state'>No metrics available. Run training first.</div>"
 
     cards = []
-    for _, row in metrics_df.iterrows():
+    ranked_df = metrics_df.copy()
+    if "F1" in ranked_df.columns:
+        ranked_df = ranked_df.sort_values("F1", ascending=False)
+
+    for rank, (_, row) in enumerate(ranked_df.iterrows(), start=1):
         model_name = str(row.get('Model', 'Unknown'))
         precision = metric_value(row, 'Precision')
         recall = metric_value(row, 'Recall')
         f1 = metric_value(row, 'F1')
+        roc_auc = metric_value(row, 'ROC AUC')
         accent = MODEL_COLORS.get(model_name, '#6366f1')
         is_best = model_name == best_model
+        safe_model = html.escape(model_name)
 
         cards.append(f"""
         <div class="model-card {'best-card' if is_best else ''}">
           <div class="model-card-top">
-            <div class="model-name">{model_name}</div>
+            <div>
+              <div class='model-rank'>Rank {rank}</div>
+              <div class="model-name">{safe_model}</div>
+            </div>
             {"<div class='best-badge'>Best Model</div>" if is_best else ""}
+          </div>
+          <div class='model-primary-score'>
+            <span>F1-score</span>
+            <strong>{percent_text(f1)}</strong>
           </div>
           <div class="model-score-row">
             <span>Precision</span><strong>{percent_text(precision)}</strong>
@@ -618,10 +698,7 @@ def build_model_cards_html(metrics_df, best_model):
             <span>Recall</span><strong>{percent_text(recall)}</strong>
           </div>
           <div class="mini-bar"><span style="width:{recall*100:.1f}%; background:{accent}"></span></div>
-          <div class="model-score-row">
-            <span>F1-score</span><strong>{percent_text(f1)}</strong>
-          </div>
-          <div class="mini-bar"><span style="width:{f1*100:.1f}%; background:{accent}"></span></div>
+          <div class='model-card-foot'>ROC AUC {percent_text(roc_auc)}</div>
         </div>
         """)
 
@@ -641,22 +718,75 @@ def build_insight_card(metrics_df, best_model):
     precision = metric_value(row, 'Precision')
     recall = metric_value(row, 'Recall')
     f1 = metric_value(row, 'F1')
+    safe_model = html.escape(str(best_model))
 
     return f"""
     <div class='insight-card'>
-      <div class='section-eyebrow'>Model Insight</div>
-      <div class='insight-title'>Best Model: {best_model}</div>
-      <div class='insight-grid'>
-        <div class='insight-item'><span>Why chosen</span><strong>Highest F1-score</strong></div>
-        <div class='insight-item'><span>Precision</span><strong>{percent_text(precision)}</strong></div>
-        <div class='insight-item'><span>Recall</span><strong>{percent_text(recall)}</strong></div>
-        <div class='insight-item'><span>F1-score</span><strong>{percent_text(f1)}</strong></div>
+      <div class='model-insight-copy'>
+        <div class='section-eyebrow'>Model insight</div>
+        <h3>Why {safe_model} wins</h3>
+        <p>It keeps false alarms low while still catching a meaningful share of fraud, which makes it the strongest option for a practical review queue.</p>
       </div>
-      <ul class='insight-list'>
-        <li>Strong precision keeps false alarms low.</li>
-        <li>Balanced recall helps catch fraudulent transactions.</li>
-        <li>Best overall trade-off for live demo presentation.</li>
-      </ul>
+      <div class='model-insight-grid'>
+        <div><span>Decision reason</span><strong>Highest F1-score</strong></div>
+        <div><span>Precision</span><strong>{percent_text(precision)}</strong></div>
+        <div><span>Recall</span><strong>{percent_text(recall)}</strong></div>
+        <div><span>F1-score</span><strong>{percent_text(f1)}</strong></div>
+      </div>
+    </div>
+    """
+
+
+def build_metric_comparison_html(metrics_df):
+    if metrics_df is None or metrics_df.empty:
+        return "<div class='empty-state'>Metric comparison will appear after training.</div>"
+
+    metric_specs = [
+        ("Precision", "False alarm control"),
+        ("Recall", "Fraud coverage"),
+        ("F1", "Balanced score"),
+    ]
+    panels = []
+    for metric_name, subtitle in metric_specs:
+        if metric_name not in metrics_df.columns:
+            continue
+
+        rows = []
+        sorted_df = metrics_df[["Model", metric_name]].copy().sort_values(metric_name, ascending=False)
+        for _, row in sorted_df.iterrows():
+            model_name = str(row["Model"])
+            safe_model = html.escape(model_name)
+            value = float(row[metric_name])
+            accent = MODEL_COLORS.get(model_name, "#6366f1")
+            rows.append(f"""
+              <div class='metric-row'>
+                <div class='metric-row-head'><span>{safe_model}</span><strong>{percent_text(value)}</strong></div>
+                <div class='metric-track'><i style='width: {value * 100:.1f}%; background: {accent}'></i></div>
+              </div>
+            """)
+
+        title = "F1-score" if metric_name == "F1" else metric_name
+        panels.append(f"""
+          <div class='metric-panel'>
+            <div class='metric-panel-head'>
+              <span>{html.escape(subtitle)}</span>
+              <strong>{title}</strong>
+            </div>
+            {''.join(rows)}
+          </div>
+        """)
+
+    return f"""
+    <div class='metric-comparison-card'>
+      <div class='panel-heading'>
+        <div>
+          <div class='section-eyebrow'>Metric comparison</div>
+          <h3>Performance at a glance</h3>
+        </div>
+      </div>
+      <div class='metric-panel-grid'>
+        {''.join(panels)}
+      </div>
     </div>
     """
 
@@ -723,15 +853,100 @@ def build_summary_cards_html(total, fraud_count, normal_count):
 
 
 def build_batch_summary_html(summary):
+    fraud_rate = float(summary["fraud_rate"])
+    fraud_rate_pct = min(max(fraud_rate * 100, 0), 100)
+    risk_label = "Elevated review load" if fraud_rate >= 0.01 else "Low review load"
+    risk_class = "risk-high" if fraud_rate >= 0.01 else "risk-low"
     return f"""
     <div class='batch-summary-card'>
-      <div class='section-eyebrow'>Batch Prediction Summary</div>
-      <div class='summary-grid'>
-        <div class='summary-stat'><span>Total rows</span><strong>{summary['total']}</strong></div>
-        <div class='summary-stat danger'><span>Predicted fraud</span><strong>{summary['fraud']}</strong></div>
-        <div class='summary-stat success'><span>Predicted normal</span><strong>{summary['normal']}</strong></div>
+      <div class='batch-summary-head'>
+        <div>
+          <div class='section-eyebrow'>Batch prediction summary</div>
+          <h3>Scoring complete</h3>
+          <p>{summary['total']:,} transactions were evaluated by the active fraud model.</p>
+        </div>
+        <div class='batch-risk-pill {risk_class}'>
+          <span>{risk_label}</span>
+          <strong>{percent_text(fraud_rate)}</strong>
+        </div>
       </div>
-      <div class='summary-footnote'>Fraud rate: {percent_text(summary['fraud_rate'])}</div>
+      <div class='batch-summary-grid'>
+        <div class='batch-stat total'><span>Total rows</span><strong>{summary['total']:,}</strong></div>
+        <div class='batch-stat danger'><span>Predicted fraud</span><strong>{summary['fraud']:,}</strong></div>
+        <div class='batch-stat success'><span>Predicted normal</span><strong>{summary['normal']:,}</strong></div>
+      </div>
+      <div class='batch-meter' aria-label='Fraud rate meter'>
+        <span style='width: {fraud_rate_pct:.2f}%'></span>
+      </div>
+      <div class='summary-footnote'>Fraud rate is {percent_text(fraud_rate)} across the uploaded file.</div>
+    </div>
+    """
+
+
+def build_batch_alert_html(message):
+    safe_message = html.escape(message)
+    return f"""
+    <div class='summary-alert error'>
+      <strong>Batch prediction paused</strong>
+      <span>{safe_message}</span>
+    </div>
+    """
+
+
+def build_batch_empty_state_html():
+    return """
+    <div class='preview-empty-state'>
+      <div class='preview-empty-title'>No scored rows yet</div>
+      <div class='preview-empty-copy'>Upload a CSV, then run batch prediction to populate this preview.</div>
+    </div>
+    """
+
+
+def build_prediction_preview_html(preview_df):
+    if preview_df is None or preview_df.empty:
+      return build_batch_empty_state_html()
+
+    rows = []
+    for row_number, (_, row) in enumerate(preview_df.iterrows(), start=1):
+      label = html.escape(str(row["Prediction_Label"]))
+      probability = float(row["Fraud_Probability"])
+      probability_pct = min(max(probability * 100, 0), 100)
+      row_class = "fraud-row" if label.lower() == "fraudulent" else "normal-row"
+      rows.append(f"""
+        <tr class='{row_class}'>
+          <td>{row_number}</td>
+          <td><span class='preview-label'>{label}</span></td>
+          <td>
+            <div class='probability-cell'>
+              <strong>{probability_pct:.1f}%</strong>
+              <span><i style='width: {probability_pct:.1f}%'></i></span>
+            </div>
+          </td>
+        </tr>
+      """)
+
+    return f"""
+    <div class='batch-preview-card'>
+      <div class='batch-preview-head'>
+        <div>
+          <div class='section-eyebrow'>Prediction preview</div>
+          <h3>First {len(preview_df)} scored rows</h3>
+        </div>
+      </div>
+      <div class='batch-preview-table-wrap'>
+        <table class='batch-preview-table'>
+          <thead>
+            <tr>
+              <th>Row</th>
+              <th>Prediction</th>
+              <th>Fraud probability</th>
+            </tr>
+          </thead>
+          <tbody>
+            {''.join(rows)}
+          </tbody>
+        </table>
+      </div>
     </div>
     """
 
@@ -743,14 +958,19 @@ def build_css():
     :root {
       --bg: #ffffff;
       --panel: #ffffff;
-      --panel-soft: #ffffff;
+      --panel-soft: #f8fafc;
       --text: #000000;
       --text-secondary: #000000;
       --muted: #000000;
       --text-primary: #000000;
       --text-muted: #000000;
       --line: #e5e7eb;
+      --border: #e5e7eb;
+      --surface: #f8fafc;
+      --surface-soft: #f8fafc;
       --shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+      --shadow-md: 0 6px 18px rgba(15, 23, 42, 0.08);
       --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.05);
       --blue: #2563eb;
       --emerald: #10b981;
@@ -780,14 +1000,14 @@ def build_css():
     .gradio-container .main,
     .gradio-container .app,
     .gradio-container .contain,
-    .gradio-container .wrap,
     #root {
       font-family: var(--font) !important;
       background: var(--bg) !important;
       color: var(--text) !important;
       min-height: 100vh;
-      height: 100vh !important;
-      overflow: hidden !important;
+      height: auto !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
     }
 
     .gradio-container p,
@@ -810,7 +1030,6 @@ def build_css():
     .gradio-container .main,
     .gradio-container .app,
     .gradio-container .contain,
-    .gradio-container .wrap,
     .gradio-container .tabs,
     .gradio-container .tabitem {
       background-color: #ffffff !important;
@@ -822,23 +1041,24 @@ def build_css():
       width: 100% !important;
       margin: 0 !important;
       padding: 12px 20px !important;
-      height: 100vh !important;
-      overflow: hidden !important;
+      min-height: 100vh !important;
+      height: auto !important;
+      overflow: visible !important;
     }
 
     .gradio-container .tabs {
-      height: calc(100vh - 24px) !important;
+      min-height: calc(100vh - 24px) !important;
+      height: auto !important;
       display: flex !important;
       flex-direction: column !important;
-      overflow: hidden !important;
+      overflow: visible !important;
     }
 
     .gradio-container .tabitem,
     .gradio-container [data-testid="tab-item"] {
       flex: 1 1 auto;
       min-height: 0 !important;
-      overflow-y: auto !important;
-      overflow-x: hidden !important;
+      overflow: visible !important;
     }
 
     footer { display: none !important; }
@@ -1033,35 +1253,42 @@ def build_css():
       padding: 16px !important;
       margin: 0 auto 8px !important;
       max-width: 1200px;
-      height: calc(100vh - 120px) !important;
-      overflow: hidden !important;
+      min-height: calc(100vh - 120px) !important;
+      height: auto !important;
+      overflow: visible !important;
       box-shadow: var(--shadow-soft) !important;
     }
 
     .model-scroll {
-      overflow-y: auto !important;
-      overflow-x: hidden !important;
+      overflow: visible !important;
       padding-right: 10px !important;
-      height: calc(100vh - 170px) !important;
-      max-height: calc(100vh - 170px) !important;
+      height: auto !important;
+      max-height: none !important;
       min-height: 0 !important;
     }
 
     .gradio-container .model-tab,
     .gradio-container .model-tab > div,
     .gradio-container [data-testid="tab-item"].model-tab {
-      height: calc(100vh - 70px) !important;
+      height: auto !important;
       min-height: 0 !important;
-      overflow-y: auto !important;
-      overflow-x: hidden !important;
+      overflow: visible !important;
     }
 
     .gradio-container .model-tab .section-card,
     .gradio-container .model-tab .model-scroll {
-      height: calc(100vh - 170px) !important;
-      max-height: calc(100vh - 170px) !important;
+      height: auto !important;
+      max-height: none !important;
       min-height: 0 !important;
-      overflow-y: auto !important;
+      overflow: visible !important;
+    }
+
+    .gradio-container .section-card .styler,
+    .gradio-container .data-page-card .styler,
+    .gradio-container .model-page-card .styler {
+      height: auto !important;
+      max-height: none !important;
+      overflow: visible !important;
     }
 
     .section-card h3 {
@@ -1231,11 +1458,273 @@ def build_css():
       font-size: 14px;
     }
 
+    .data-page-card,
+    .model-page-card {
+      background: #ffffff !important;
+      padding: 18px !important;
+      overflow: visible !important;
+    }
+
+    .data-page-card .styler,
+    .model-page-card .styler {
+      background: transparent !important;
+    }
+
+    .data-page-shell {
+      display: grid;
+      gap: 16px;
+    }
+
+    .data-hero {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 24px;
+      border: 1px solid #dbeafe;
+      border-radius: var(--radius-xl);
+      background:
+        linear-gradient(135deg, rgba(37, 99, 235, 0.10), rgba(20, 184, 166, 0.08)),
+        #ffffff;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.07);
+    }
+
+    .data-hero h2 {
+      margin: 0 0 8px;
+      color: #0f172a;
+      font-size: 30px;
+      font-weight: 800;
+      letter-spacing: 0;
+      line-height: 1.14;
+    }
+
+    .data-hero p {
+      margin: 0;
+      max-width: 720px;
+      color: #334155 !important;
+      font-size: 15px !important;
+      line-height: 1.6 !important;
+    }
+
+    .imbalance-callout {
+      flex: 0 0 auto;
+      min-width: 150px;
+      padding: 16px;
+      border: 1px solid #fecaca;
+      border-radius: var(--radius-lg);
+      background: #fff7f7;
+      text-align: right;
+    }
+
+    .imbalance-callout span,
+    .data-stat-card span,
+    .data-stat-card small,
+    .class-foot,
+    .data-priority-list span,
+    .model-card-foot,
+    .model-rank,
+    .banner-kicker,
+    .banner-score-grid span,
+    .model-insight-grid span,
+    .metric-panel-head span {
+      color: #64748b;
+    }
+
+    .imbalance-callout span,
+    .data-stat-card span,
+    .banner-kicker,
+    .banner-score-grid span,
+    .model-insight-grid span,
+    .metric-panel-head span {
+      display: block;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+    }
+
+    .imbalance-callout strong {
+      color: #dc2626;
+      font-size: 34px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .data-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .data-stat-card {
+      min-width: 0;
+      padding: 16px;
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius-lg);
+      background: #ffffff;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .data-stat-card strong {
+      display: block;
+      margin-bottom: 6px;
+      color: #0f172a;
+      font-size: 24px;
+      font-weight: 800;
+      line-height: 1.1;
+    }
+
+    .data-stat-card small {
+      display: block;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .data-stat-card.normal {
+      border-color: #bfdbfe;
+      background: #f8fbff;
+    }
+
+    .data-stat-card.fraud {
+      border-color: #fecaca;
+      background: #fff7f7;
+    }
+
+    .data-stat-card.ratio {
+      border-color: #ccfbf1;
+      background: #f0fdfa;
+    }
+
+    .data-lower-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .distribution-card,
+    .data-interpret-card,
+    .metric-comparison-card {
+      padding: 18px;
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius-xl);
+      background: #ffffff;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .panel-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .panel-heading h3,
+    .data-interpret-card h3,
+    .model-insight-copy h3 {
+      margin: 0;
+      color: #0f172a;
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: 0;
+      line-height: 1.25;
+    }
+
+    .class-bars {
+      display: grid;
+      gap: 18px;
+      margin-top: 8px;
+    }
+
+    .class-row {
+      display: grid;
+      gap: 8px;
+    }
+
+    .class-row-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .class-row-head span {
+      color: #0f172a;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .class-row-head strong {
+      color: #0f172a;
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .class-track {
+      height: 34px;
+      border-radius: 8px;
+      background: #e2e8f0;
+      overflow: hidden;
+    }
+
+    .class-track i {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+    }
+
+    .class-row.normal .class-track i {
+      background: linear-gradient(90deg, #2563eb, #60a5fa);
+    }
+
+    .class-row.fraud .class-track i {
+      background: linear-gradient(90deg, #dc2626, #fb7185);
+    }
+
+    .class-foot {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .data-interpret-card p {
+      margin: 8px 0 16px;
+      color: #334155 !important;
+      font-size: 14px !important;
+      line-height: 1.65 !important;
+    }
+
+    .data-priority-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .data-priority-list div {
+      padding: 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius-lg);
+      background: #f8fafc;
+    }
+
+    .data-priority-list strong {
+      display: block;
+      color: #0f172a;
+      font-size: 14px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+
+    .data-priority-list span {
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
     .model-cards-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 12px;
-      margin-bottom: 20px;
+      gap: 14px;
+      margin-bottom: 16px;
     }
 
     .model-card {
@@ -1243,8 +1732,8 @@ def build_css():
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: var(--radius-lg);
-      padding: 16px;
-      box-shadow: var(--shadow-soft);
+      padding: 18px;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
     }
 
     .model-card::before {
@@ -1258,9 +1747,9 @@ def build_css():
     }
 
     .best-card {
-      border-color: var(--blue) !important;
-      background: #dbeafe !important;
-      box-shadow: var(--shadow) !important;
+      border-color: #60a5fa !important;
+      background: linear-gradient(180deg, #eff6ff 0%, #ffffff 100%) !important;
+      box-shadow: 0 12px 30px rgba(37, 99, 235, 0.12) !important;
     }
 
     .best-card::before {
@@ -1272,27 +1761,62 @@ def build_css():
       justify-content: space-between;
       align-items: start;
       gap: 12px;
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
 
     .model-name {
-      font-size: 16px;
-      font-weight: 700;
-      color: var(--text);
+      font-size: 18px;
+      font-weight: 800;
+      color: #0f172a;
       line-height: 1.2;
+    }
+
+    .model-rank {
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 5px;
     }
 
     .best-badge {
       white-space: nowrap;
-      background: var(--emerald);
+      background: #10b981;
       color: white;
-      border: 1px solid var(--emerald);
+      border: 1px solid #10b981;
       font-size: 10px;
-      font-weight: 700;
+      font-weight: 800;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
-      border-radius: 4px;
-      padding: 4px 8px;
+      letter-spacing: 0.06em;
+      border-radius: 999px;
+      padding: 5px 9px;
+    }
+
+    .model-primary-score {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px;
+      margin-bottom: 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius-lg);
+      background: #f8fafc;
+    }
+
+    .model-primary-score span {
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .model-primary-score strong {
+      color: #0f172a;
+      font-size: 26px;
+      font-weight: 800;
+      line-height: 1;
     }
 
     .model-score-row {
@@ -1300,8 +1824,13 @@ def build_css():
       justify-content: space-between;
       align-items: center;
       font-size: 13px;
-      color: var(--text-secondary);
+      color: #475569 !important;
       margin-top: 8px;
+    }
+
+    .model-score-row span {
+      color: #475569 !important;
+      font-weight: 700;
     }
 
     .model-score-row strong {
@@ -1311,10 +1840,10 @@ def build_css():
     }
 
     .mini-bar {
-      height: 6px;
+      height: 7px;
       width: 100%;
       background: var(--line);
-      border-radius: 3px;
+      border-radius: 999px;
       overflow: hidden;
       margin-top: 6px;
     }
@@ -1323,6 +1852,16 @@ def build_css():
       display: block;
       height: 100%;
       border-radius: inherit;
+    }
+
+    .model-card-foot {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #e2e8f0;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
     }
 
     .insight-card, .batch-summary-card, .summary-alert {
@@ -1335,25 +1874,51 @@ def build_css():
 
     .best-model-banner {
       display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      align-items: center;
-      border: 1px solid var(--emerald);
-      background: #f0fdf4;
-      color: var(--emerald);
-      border-radius: var(--radius-lg);
-      padding: 12px 14px;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: stretch;
+      border: 1px solid #bbf7d0;
+      background:
+        linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(37, 99, 235, 0.07)),
+        #ffffff;
+      color: #0f172a;
+      border-radius: var(--radius-xl);
+      padding: 20px;
       margin-bottom: 16px;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.07);
     }
 
     .best-model-banner strong {
-      font-size: 15px;
-      color: var(--text);
+      display: block;
+      font-size: 28px;
+      color: #0f172a;
+      line-height: 1.1;
     }
 
-    .best-model-banner span {
+    .best-model-banner p {
+      margin: 8px 0 0;
+      max-width: 560px;
       font-size: 14px;
-      color: var(--text-secondary);
+      line-height: 1.55;
+      color: #334155 !important;
+    }
+
+    .banner-score-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(92px, 1fr));
+      gap: 10px;
+      min-width: 330px;
+    }
+
+    .banner-score-grid div {
+      padding: 12px;
+      border: 1px solid #dbeafe;
+      border-radius: var(--radius-lg);
+      background: rgba(255, 255, 255, 0.82);
+    }
+
+    .banner-score-grid strong {
+      font-size: 22px;
     }
 
     .analytics-grid {
@@ -1377,6 +1942,108 @@ def build_css():
 
     .chart-wide {
       margin-top: 16px;
+    }
+
+    .insight-card {
+      display: grid;
+      grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+      gap: 16px;
+      align-items: stretch;
+      background: #ffffff !important;
+      border-radius: var(--radius-xl) !important;
+      margin-bottom: 16px;
+    }
+
+    .model-insight-copy p {
+      margin: 8px 0 0;
+      color: #334155 !important;
+      font-size: 14px !important;
+      line-height: 1.65 !important;
+    }
+
+    .model-insight-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .model-insight-grid div {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius-lg);
+      background: #ffffff;
+    }
+
+    .model-insight-grid strong {
+      color: #0f172a;
+      font-size: 17px;
+      font-weight: 800;
+      line-height: 1.2;
+    }
+
+    .metric-comparison-card {
+      margin-bottom: 16px;
+    }
+
+    .metric-panel-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric-panel {
+      padding: 14px;
+      border: 1px solid #dbe4f0;
+      border-radius: var(--radius-lg);
+      background: #ffffff;
+      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
+    }
+
+    .metric-panel-head {
+      margin-bottom: 14px;
+    }
+
+    .metric-panel-head strong {
+      color: #0f172a;
+      font-size: 18px;
+      font-weight: 800;
+    }
+
+    .metric-row {
+      display: grid;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .metric-row-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: #0f172a !important;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .metric-row-head span,
+    .metric-row-head strong {
+      color: #0f172a !important;
+      -webkit-text-fill-color: #0f172a !important;
+      opacity: 1 !important;
+    }
+
+    .metric-track {
+      height: 9px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      overflow: hidden;
+    }
+
+    .metric-track i {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
     }
 
     .prediction-shell {
@@ -1625,9 +2292,9 @@ def build_css():
     }
 
     .batch-hub-card {
-      padding: 14px !important;
-      background: linear-gradient(180deg, #ffffff 0%, #fcfdff 100%) !important;
-      min-height: auto !important;
+      padding: 18px !important;
+      background: #f8fafc !important;
+      min-height: calc(100vh - 120px) !important;
       overflow-y: auto !important;
       overflow-x: hidden !important;
     }
@@ -1635,33 +2302,75 @@ def build_css():
     .batch-hero {
       border: 1px solid var(--line);
       border-radius: var(--radius-xl);
-      background: linear-gradient(130deg, #f5f9ff 0%, #ffffff 60%);
-      padding: 14px 16px;
-      margin-bottom: 10px;
-      box-shadow: var(--shadow-md);
+      background:
+        linear-gradient(135deg, rgba(37, 99, 235, 0.10) 0%, rgba(16, 185, 129, 0.07) 100%),
+        #ffffff;
+      padding: 22px 24px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+    }
+
+    .batch-hero-copy {
+      min-width: 0;
     }
 
     .batch-hero h2 {
       margin: 0 0 8px;
-      font-size: 26px;
+      font-size: 30px;
       font-weight: 800;
-      letter-spacing: -0.03em;
+      letter-spacing: 0;
       color: #000000;
     }
 
     .batch-hero p {
       margin: 0;
-      color: #000000;
-      font-size: 13px;
-      line-height: 1.5;
+      color: #334155 !important;
+      font-size: 15px !important;
+      line-height: 1.55 !important;
+      max-width: 620px;
+    }
+
+    .batch-schema-strip {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid #dbeafe;
+      border-radius: var(--radius-lg);
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .batch-schema-strip span {
+      color: #475569;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-right: 4px;
+    }
+
+    .batch-schema-strip strong {
+      color: #0f172a;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 6px;
+      padding: 6px 9px;
+      font-size: 12px;
+      white-space: nowrap;
     }
 
     .batch-shell {
       display: grid;
-      grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
-      gap: 10px;
-      align-items: stretch;
-      background: #ffffff !important;
+      grid-template-columns: minmax(300px, 0.82fr) minmax(0, 1.18fr);
+      gap: 16px;
+      align-items: start;
+      background: #f8fafc !important;
       height: auto !important;
       min-height: auto !important;
       overflow: visible !important;
@@ -1682,48 +2391,77 @@ def build_css():
       background: #ffffff !important;
       border: 1px solid var(--line) !important;
       border-radius: var(--radius-xl) !important;
-      padding: 12px !important;
-      box-shadow: var(--shadow-md) !important;
+      padding: 20px !important;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.07) !important;
       height: auto !important;
-      min-height: 100% !important;
-      overflow: visible !important;
+      min-height: 0 !important;
+      overflow: hidden !important;
     }
 
     .batch-results-panel {
-      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%) !important;
+      background: #ffffff !important;
+    }
+
+    .batch-panel-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+
+    .batch-panel-head .insight-title {
+      margin-bottom: 0 !important;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .step-badge {
+      flex: 0 0 auto;
+      border: 1px solid #cbd5e1;
+      border-radius: 999px;
+      color: #334155;
+      background: #f8fafc;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 6px 9px;
     }
 
     .upload-feedback {
       border-radius: var(--radius-lg);
-      padding: 14px 12px;
+      padding: 18px 14px;
       border: 1px solid var(--line);
       display: grid;
-      gap: 4px;
+      gap: 6px;
       text-align: center;
-      margin: 4px 0 6px;
-      background: #ffffff;
+      margin: 8px 0 8px;
+      background: #f8fafc;
     }
 
     .upload-icon {
-      width: 28px;
-      height: 28px;
-      border-radius: 999px;
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
       margin: 0 auto;
       display: grid;
       place-items: center;
       font-weight: 800;
       color: #1d4ed8;
       background: #e0ebff;
+      font-size: 11px;
+      letter-spacing: 0.08em;
     }
 
     .upload-title {
-      font-size: 13px;
-      font-weight: 700;
+      font-size: 15px;
+      font-weight: 800;
       color: #0f172a;
     }
 
     .upload-subtitle {
-      font-size: 12px;
+      font-size: 13px;
       color: #334155;
       line-height: 1.45;
     }
@@ -1748,6 +2486,19 @@ def build_css():
       background: #fee2e2;
     }
 
+    .batch-upload-button,
+    .batch-upload-button button {
+      width: 100% !important;
+    }
+
+    .batch-upload-button button {
+      min-height: 46px !important;
+      justify-content: center !important;
+      font-weight: 800 !important;
+      border-radius: var(--radius-lg) !important;
+      box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18) !important;
+    }
+
     .batch-results-panel .gradio-image,
     .batch-results-panel img,
     .batch-results-panel [data-testid="image"] {
@@ -1755,8 +2506,9 @@ def build_css():
       border-radius: var(--radius-lg) !important;
       overflow: hidden;
       background: #ffffff !important;
-      min-height: 120px;
-      max-height: 200px;
+      min-height: 150px;
+      max-height: 240px;
+      box-shadow: var(--shadow-soft);
     }
 
     .batch-results-panel table,
@@ -1787,18 +2539,18 @@ def build_css():
     .batch-results-panel [data-testid="dataframe"],
     .batch-upload-panel [data-testid="dataframe"] {
       min-height: 120px;
-      max-height: 160px;
+      max-height: 170px;
       overflow: auto;
     }
 
     .batch-upload-panel [data-testid="file-upload"],
     .batch-upload-panel .upload-container,
     .batch-upload-panel .file-preview {
-      min-height: 92px !important;
-      max-height: 112px !important;
-      height: 104px !important;
+      min-height: 154px !important;
+      max-height: 170px !important;
+      height: 164px !important;
       overflow: visible !important;
-      border: 2px dashed #93c5fd !important;
+      border: 2px dashed #60a5fa !important;
       border-radius: var(--radius-lg) !important;
       background: #f8fbff !important;
       transition: all 0.2s ease !important;
@@ -1807,10 +2559,10 @@ def build_css():
     .batch-upload-panel [data-testid="file-upload"] > div,
     .batch-upload-panel .upload-container > div,
     .batch-upload-panel .file-preview > div {
-      min-height: 92px !important;
-      max-height: 112px !important;
-      height: 104px !important;
-      padding: 8px !important;
+      min-height: 146px !important;
+      max-height: 162px !important;
+      height: 156px !important;
+      padding: 12px !important;
     }
 
     .batch-upload-panel [data-testid="file-upload"]:hover,
@@ -1835,22 +2587,286 @@ def build_css():
       margin-bottom: 6px !important;
     }
 
-    .batch-results-panel .summary-grid {
-      margin: 8px 0 10px;
-    }
-
-    .batch-results-panel .summary-stat {
-      background: #ffffff;
-      border-radius: var(--radius-md);
-      box-shadow: var(--shadow-sm);
-    }
-
     .batch-summary-card {
-      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-      border: 1px solid var(--border);
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%) !important;
+      border: 1px solid var(--line) !important;
       border-radius: var(--radius-xl);
-      padding: 18px;
-      box-shadow: var(--shadow-sm);
+      padding: 18px !important;
+      box-shadow: var(--shadow-soft) !important;
+    }
+
+    .batch-summary-head,
+    .batch-preview-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .batch-summary-head h3,
+    .batch-preview-head h3 {
+      margin: 0 0 4px;
+      color: #0f172a;
+      font-size: 19px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .batch-summary-head p {
+      margin: 0;
+      color: #475569 !important;
+      font-size: 13px !important;
+      line-height: 1.5 !important;
+    }
+
+    .batch-risk-pill {
+      flex: 0 0 auto;
+      min-width: 118px;
+      border-radius: var(--radius-lg);
+      border: 1px solid #bfdbfe;
+      background: #eff6ff;
+      padding: 10px 12px;
+      text-align: right;
+    }
+
+    .batch-risk-pill span {
+      display: block;
+      color: #334155;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 4px;
+    }
+
+    .batch-risk-pill strong {
+      color: #1d4ed8;
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .batch-risk-pill.risk-high {
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+
+    .batch-risk-pill.risk-high strong {
+      color: #dc2626;
+    }
+
+    .batch-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 12px 0;
+    }
+
+    .batch-stat {
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius-lg);
+      background: #ffffff;
+      padding: 12px;
+      min-width: 0;
+    }
+
+    .batch-stat span {
+      display: block;
+      color: #64748b;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .batch-stat strong {
+      color: #0f172a;
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .batch-stat.danger {
+      border-color: #fecaca;
+      background: #fff7f7;
+    }
+
+    .batch-stat.success {
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+    }
+
+    .batch-meter {
+      height: 9px;
+      background: #e2e8f0;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .batch-meter span {
+      display: block;
+      height: 100%;
+      min-width: 3px;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #22c55e 0%, #f59e0b 55%, #dc2626 100%);
+    }
+
+    .upload-checklist {
+      display: grid;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .upload-checklist div {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius-lg);
+      background: #f8fafc;
+    }
+
+    .upload-checklist strong {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #dbeafe;
+      color: #1d4ed8;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .upload-checklist span {
+      color: #334155;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .batch-preview-card,
+    .preview-empty-state {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      background: #ffffff;
+      padding: 16px;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .preview-empty-state {
+      display: grid;
+      place-items: center;
+      text-align: center;
+      min-height: 170px;
+      background: #f8fafc;
+      border-style: dashed;
+    }
+
+    .preview-empty-title {
+      color: #0f172a;
+      font-size: 16px;
+      font-weight: 800;
+      margin-bottom: 6px;
+    }
+
+    .preview-empty-copy {
+      color: #64748b;
+      font-size: 13px;
+    }
+
+    .batch-preview-table-wrap {
+      max-height: 310px;
+      overflow: auto;
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius-lg);
+      background: #ffffff;
+    }
+
+    .batch-preview-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #ffffff !important;
+      box-shadow: none !important;
+      border: none !important;
+    }
+
+    .batch-preview-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 11px 12px;
+      background: #f8fafc !important;
+      border-bottom: 1px solid #e2e8f0 !important;
+      color: #334155 !important;
+      text-align: left;
+      font-size: 11px !important;
+      font-weight: 800 !important;
+      letter-spacing: 0.08em !important;
+      text-transform: uppercase !important;
+    }
+
+    .batch-preview-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #f1f5f9;
+      color: #0f172a !important;
+      font-size: 13px !important;
+      background: #ffffff !important;
+    }
+
+    .batch-preview-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .preview-label {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #ecfdf5;
+      border: 1px solid #bbf7d0;
+      color: #047857;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .fraud-row .preview-label {
+      background: #fef2f2;
+      border-color: #fecaca;
+      color: #b91c1c;
+    }
+
+    .probability-cell {
+      display: grid;
+      grid-template-columns: 54px minmax(80px, 1fr);
+      align-items: center;
+      gap: 10px;
+    }
+
+    .probability-cell strong {
+      color: #0f172a;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .probability-cell span {
+      height: 7px;
+      background: #e2e8f0;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .probability-cell i {
+      display: block;
+      height: 100%;
+      min-width: 2px;
+      border-radius: inherit;
+      background: #2563eb;
+    }
+
+    .fraud-row .probability-cell i {
+      background: #dc2626;
     }
 
     .conclusion-shell {
@@ -2077,10 +3093,37 @@ def build_css():
       border: 1px solid var(--line) !important;
     }
 
+    .gradio-container .model-page-card,
+    .gradio-container .data-page-card {
+      border-color: #e5e7eb !important;
+      box-shadow: var(--shadow-soft) !important;
+    }
+
+    .gradio-container .gr-group.section-card.model-scroll.model-page-card,
+    .gradio-container .gr-box.section-card.model-scroll.model-page-card,
+    .gradio-container .block.section-card.model-scroll.model-page-card,
+    .gradio-container .section-card.model-scroll.model-page-card {
+      height: auto !important;
+      max-height: none !important;
+      overflow: visible !important;
+      overflow-y: visible !important;
+    }
+
+    .gradio-container .model-tab .column {
+      height: auto !important;
+      max-height: none !important;
+      overflow: visible !important;
+      overflow-y: visible !important;
+    }
+
     @media (max-width: 1100px) {
-      .analytics-grid, .prediction-shell, .batch-shell, .conclusion-lower-grid { grid-template-columns: 1fr; }
+      .analytics-grid, .prediction-shell, .batch-shell, .conclusion-lower-grid, .data-lower-grid, .insight-card { grid-template-columns: 1fr; }
       .overview-grid, .method-grid, .mini-model-grid, .conclusion-insight-grid, .best-model-feature-metrics { grid-template-columns: 1fr; }
-      .insight-grid, .summary-grid, .input-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .insight-grid, .summary-grid, .input-grid, .data-stat-grid, .model-insight-grid, .metric-panel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .data-hero, .best-model-banner { align-items: flex-start; flex-direction: column; }
+      .imbalance-callout, .banner-score-grid { width: 100%; min-width: 0; text-align: left; }
+      .batch-hero { align-items: flex-start; flex-direction: column; }
+      .batch-schema-strip { width: 100%; flex-wrap: wrap; }
       .batch-results-panel [data-testid="dataframe"],
       .batch-upload-panel [data-testid="dataframe"] { max-height: 200px; }
     }
@@ -2089,10 +3132,20 @@ def build_css():
       .section-card { padding: 16px !important; margin: 0 10px 14px !important; }
       .center-hero { padding: 24px 16px; }
       .hero-title { font-size: 32px; }
-      .insight-grid, .summary-grid, .input-grid, .best-model-feature-metrics, .conclusion-insight-grid { grid-template-columns: 1fr; }
+      .insight-grid, .summary-grid, .input-grid, .best-model-feature-metrics, .conclusion-insight-grid, .data-stat-grid, .model-insight-grid, .metric-panel-grid, .banner-score-grid { grid-template-columns: 1fr; }
       .gradio-container { padding: 16px !important; }
       .button-row { flex-direction: column !important; }
+      .data-page-card, .model-page-card { padding: 14px !important; }
+      .data-hero { padding: 18px; }
+      .data-hero h2, .best-model-banner strong { font-size: 24px; }
+      .batch-hub-card { padding: 14px !important; }
+      .batch-hero { padding: 18px; }
       .batch-hero h2 { font-size: 24px; }
+      .batch-summary-head,
+      .batch-preview-head { flex-direction: column; }
+      .batch-risk-pill { width: 100%; text-align: left; }
+      .batch-summary-grid { grid-template-columns: 1fr; }
+      .probability-cell { grid-template-columns: 48px minmax(54px, 1fr); }
       .batch-results-panel [data-testid="dataframe"],
       .batch-upload-panel [data-testid="dataframe"] { max-height: 180px; }
     }
@@ -2112,17 +3165,13 @@ APP_THEME = gr.themes.Soft().set(
 # ─── Build Data ───────────────────────────────────────────────────────────────
 metrics_df, best_model = load_comparison_data()
 dataset_summary = load_dataset_summary()
-class_distribution_chart = create_class_distribution_chart(dataset_summary)
 cards_html = build_model_cards_html(metrics_df, best_model)
 insight_html = build_insight_card(metrics_df, best_model)
 best_banner_html = build_best_model_banner(metrics_df, best_model)
+metric_comparison_html = build_metric_comparison_html(metrics_df)
 data_insights_html = build_data_insights_html(dataset_summary)
 methodology_html = build_methodology_html()
 conclusion_html = build_conclusion_html(metrics_df, best_model)
-precision_chart = create_metric_chart(metrics_df, 'Precision', 'Precision Comparison')
-recall_chart = create_metric_chart(metrics_df, 'Recall', 'Recall Comparison')
-f1_chart = create_metric_chart(metrics_df, 'F1', 'F1-score Comparison')
-roc_path = load_roc_image_path()
 
 
 # ─── Build UI ─────────────────────────────────────────────────────────────────
@@ -2133,36 +3182,19 @@ with gr.Blocks(title='Credit Card Fraud Detection') as demo:
         gr.HTML(build_overview_html())
 
     with gr.Tab('2. Data & Insights'):
-      with gr.Group(elem_classes=['section-card']):
+      with gr.Group(elem_classes=['section-card', 'data-page-card']):
         gr.HTML(data_insights_html)
-        gr.Image(value=class_distribution_chart, show_label=False, interactive=False)
 
     with gr.Tab('3. Methodology'):
       with gr.Group(elem_classes=['section-card']):
         gr.HTML(methodology_html)
 
     with gr.Tab('4. Model Comparison', elem_classes=['model-tab']):
-      with gr.Group(elem_classes=['section-card', 'model-scroll']):
+      with gr.Group(elem_classes=['section-card', 'model-scroll', 'model-page-card']):
         gr.HTML(best_banner_html)
         gr.HTML(cards_html)
         gr.HTML(insight_html)
-
-        with gr.Row(elem_classes=['analytics-grid']):
-          with gr.Column(elem_classes=['chart-card']):
-            if precision_chart:
-              gr.Image(value=precision_chart, show_label=False, interactive=False)
-          with gr.Column(elem_classes=['chart-card']):
-            if recall_chart:
-              gr.Image(value=recall_chart, show_label=False, interactive=False)
-          with gr.Column(elem_classes=['chart-card']):
-            if f1_chart:
-              gr.Image(value=f1_chart, show_label=False, interactive=False)
-
-        with gr.Row(elem_classes=['chart-wide']):
-          if roc_path:
-            gr.Image(value=roc_path, show_label=False, interactive=False)
-          else:
-            gr.Markdown('*ROC comparison figure will appear here after training.*')
+        gr.HTML(metric_comparison_html)
 
         if metrics_df is not None and not metrics_df.empty:
           with gr.Accordion('Detailed Metrics Table', open=False):
@@ -2180,35 +3212,70 @@ with gr.Blocks(title='Credit Card Fraud Detection') as demo:
       with gr.Group(elem_classes=['section-card', 'batch-hub-card']):
         gr.HTML("""
           <div class='batch-hero'>
-            <div class='section-eyebrow'>Bulk fraud scoring</div>
-            <h2>Batch Prediction Workspace</h2>
-            <p>Upload a CSV with <strong>Amount</strong> and <strong>V1–V28</strong>, run prediction, then review summary metrics and fraud distribution.</p>
+            <div class='batch-hero-copy'>
+              <div class='section-eyebrow'>Bulk fraud scoring</div>
+              <h2>Batch Prediction Workspace</h2>
+              <p>Upload a transaction file, score every row, and export a clean CSV with fraud labels and probabilities.</p>
+            </div>
+            <div class='batch-schema-strip'>
+              <span>Required schema</span>
+              <strong>Amount</strong>
+              <strong>V1-V28</strong>
+              <strong>CSV</strong>
+            </div>
           </div>
         """)
 
         with gr.Row(elem_classes=['batch-shell']):
           with gr.Column(elem_classes=['form-card', 'batch-upload-panel']):
-            gr.HTML("<div class='section-eyebrow'>Step 1</div><div class='insight-title'>Upload CSV</div>")
-            csv_input = gr.File(label='Upload CSV', file_types=['.csv'])
+            gr.HTML("""
+              <div class='batch-panel-head'>
+                <div>
+                  <div class='section-eyebrow'>Step 1</div>
+                  <div class='insight-title'>Upload CSV</div>
+                </div>
+                <span class='step-badge'>Input</span>
+              </div>
+            """)
+            csv_input = gr.UploadButton(
+              label='Select CSV File',
+              file_types=['.csv'],
+              variant='primary',
+              elem_classes=['batch-upload-button'],
+            )
             preview_note = gr.HTML("""
               <div class='upload-feedback upload-empty'>
-                <div class='upload-icon'>⤴</div>
-                <div class='upload-title'>Drop CSV file here</div>
-                <div class='upload-subtitle'>or click Upload CSV to choose a file</div>
+                <div class='upload-icon'>UP</div>
+                <div class='upload-title'>No file selected</div>
+                <div class='upload-subtitle'>Amount and V1-V28 columns are required for scoring.</div>
               </div>
             """)
             process_btn = gr.Button('Run Batch Prediction', variant='primary')
-            gr.Markdown('*Required columns: Amount, V1–V28*')
+            gr.HTML("""
+              <div class='upload-checklist'>
+                <div><strong>1</strong><span>Use the same feature columns as training.</span></div>
+                <div><strong>2</strong><span>Run scoring to create predictions.</span></div>
+                <div><strong>3</strong><span>Download the scored CSV.</span></div>
+              </div>
+            """)
 
           with gr.Column(elem_classes=['form-card', 'batch-results-panel']):
-            gr.HTML("<div class='section-eyebrow'>Step 2</div><div class='insight-title'>Results & Insights</div>")
+            gr.HTML("""
+              <div class='batch-panel-head'>
+                <div>
+                  <div class='section-eyebrow'>Step 2</div>
+                  <div class='insight-title'>Results & Insights</div>
+                </div>
+                <span class='step-badge'>Output</span>
+              </div>
+            """)
             preview_table = gr.Dataframe(label='Input Preview', interactive=False, visible=False)
-            batch_summary = gr.HTML()
+            batch_summary = gr.HTML(value=build_batch_empty_state_html())
             batch_chart = gr.Image(show_label=False, interactive=False, visible=False)
-            batch_result_preview = gr.Dataframe(label='Prediction Preview', interactive=False, visible=False)
+            batch_result_preview = gr.HTML(value=build_batch_empty_state_html(), visible=False)
             batch_download = gr.File(label='Download Scored CSV', visible=False)
 
-        csv_input.change(fn=preview_uploaded_csv, inputs=csv_input, outputs=[preview_note, preview_table])
+        csv_input.upload(fn=preview_uploaded_csv, inputs=csv_input, outputs=[preview_note, preview_table])
         process_btn.click(
           fn=process_batch_predictions,
           inputs=csv_input,
